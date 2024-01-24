@@ -50,8 +50,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
     private final InformixDatabaseSchema schema;
     private InformixOffsetContext effectiveOffsetContext;
 
-    public InformixStreamingChangeEventSource(InformixConnectorConfig connectorConfig,
-                                              InformixConnection dataConnection,
+    public InformixStreamingChangeEventSource(InformixConnectorConfig connectorConfig, InformixConnection dataConnection,
                                               EventDispatcher<InformixPartition, TableId> dispatcher, ErrorHandler errorHandler,
                                               Clock clock, InformixDatabaseSchema schema) {
         this.connectorConfig = connectorConfig;
@@ -92,15 +91,15 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         TxLogPosition lastPosition = offsetContext.getChangePosition();
         Lsn lastCommitLsn = lastPosition.getCommitLsn();
         Lsn lastBeginLsn = lastPosition.getBeginLsn();
+        Lsn beginLsn = lastBeginLsn.isAvailable() ? lastBeginLsn : lastCommitLsn;
 
-        try (InformixCdcTransactionEngine transactionEngine = getTransactionEngine(context, schema, lastBeginLsn)) {
+        try (InformixCdcTransactionEngine transactionEngine = getTransactionEngine(context, schema, beginLsn)) {
             transactionEngine.init();
 
-            IfmxStreamRecord streamRecord = transactionEngine.getRecord();
             /*
              * Recover Stage. In this stage, we replay event from 'beginLsn' to 'commitLsn', and rebuild the transactionCache.
              */
-            if (lastBeginLsn.compareTo(lastCommitLsn) < 0) {
+            if (beginLsn.compareTo(lastCommitLsn) < 0) {
                 LOGGER.info("Begin recover: from lastBeginLsn='{}' to lastCommitLsn='{}'", lastBeginLsn, lastCommitLsn);
                 boolean recovering = true;
                 while (context.isRunning() && recovering) {
@@ -114,6 +113,8 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
 
                     dispatcher.dispatchHeartbeatEvent(partition, offsetContext);
 
+                    IfmxStreamRecord streamRecord = transactionEngine.getRecord();
+
                     switch (streamRecord.getType()) {
                         case TRANSACTION_GROUP:
                             InformixStreamTransactionRecord transactionRecord = (InformixStreamTransactionRecord) streamRecord;
@@ -122,26 +123,27 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
                             if (commitLsn.compareTo(lastCommitLsn) < 0) {
                                 LOGGER.info("Skipping transaction with id: '{}' since commitLsn='{}' < lastCommitLsn='{}'",
                                         transactionRecord.getTransactionId(), commitLsn, lastCommitLsn);
-                            } else if (commitLsn.compareTo(lastCommitLsn) > 0) {
+                                break;
+                            }
+                            if (commitLsn.compareTo(lastCommitLsn) > 0) {
                                 LOGGER.info("Recover finished: from lastBeginLsn='{}' to lastCommitLsn='{}', current Lsn='{}'",
                                         lastBeginLsn, lastCommitLsn, commitLsn);
                                 recovering = false;
-                            } else {
-                                handleTransaction(transactionEngine, partition, offsetContext, transactionRecord, true);
                             }
+                            handleTransaction(transactionEngine, partition, offsetContext, transactionRecord, recovering);
                             break;
                         case METADATA:
                             handleMetadata(partition, offsetContext, transactionEngine, (IfxCDCMetaDataRecord) streamRecord);
                             break;
                         case TIMEOUT:
+                            LOGGER.trace(RECEIVED_GENERIC_RECORD, streamRecord, 0);
+                            break;
                         case ERROR:
-                            LOGGER.debug(RECEIVED_GENERIC_RECORD, streamRecord, 0);
+                            LOGGER.error(RECEIVED_GENERIC_RECORD, streamRecord, 0);
                             break;
                         default:
-                            LOGGER.debug(RECEIVED_UNKNOWN_RECORD_TYPE, streamRecord, 0);
+                            LOGGER.error(RECEIVED_UNKNOWN_RECORD_TYPE, streamRecord, 0);
                     }
-
-                    streamRecord = transactionEngine.getRecord();
                 }
             }
 
@@ -159,6 +161,8 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
 
                 dispatcher.dispatchHeartbeatEvent(partition, offsetContext);
 
+                IfmxStreamRecord streamRecord = transactionEngine.getRecord();
+
                 switch (streamRecord.getType()) {
                     case TRANSACTION_GROUP:
                         handleTransaction(transactionEngine, partition, offsetContext, (InformixStreamTransactionRecord) streamRecord, false);
@@ -167,14 +171,14 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
                         handleMetadata(partition, offsetContext, transactionEngine, (IfxCDCMetaDataRecord) streamRecord);
                         break;
                     case TIMEOUT:
+                        LOGGER.trace(RECEIVED_GENERIC_RECORD, streamRecord, 0);
+                        break;
                     case ERROR:
-                        LOGGER.debug(RECEIVED_GENERIC_RECORD, streamRecord, 0);
+                        LOGGER.error(RECEIVED_GENERIC_RECORD, streamRecord, 0);
                         break;
                     default:
-                        LOGGER.debug(RECEIVED_UNKNOWN_RECORD_TYPE, streamRecord, 0);
+                        LOGGER.error(RECEIVED_UNKNOWN_RECORD_TYPE, streamRecord, 0);
                 }
-
-                streamRecord = transactionEngine.getRecord();
             }
         }
         catch (InterruptedException e) {
