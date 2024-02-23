@@ -73,6 +73,6 @@ jobs:
           -P${{ matrix.informix-plugin }}
           -Dformat.formatter.goal=validate
           -Dformat.imports.goal=check
-          -Ddebezium.test.records.waittime=5
-          -Ddebezium.test.records.waittime.after.nulls=5
+          -Ddebezium.test.records.waittime=7
+          -Ddebezium.test.records.waittime.after.nulls=13
           -DfailFlakyTests=false

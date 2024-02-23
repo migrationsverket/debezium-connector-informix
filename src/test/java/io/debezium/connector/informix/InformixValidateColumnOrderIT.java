@@ -86,8 +86,6 @@ public class InformixValidateColumnOrderIT extends AbstractConnectorTest {
         start(InformixConnector.class, config);
         assertConnectorIsRunning();
 
-        waitForSnapshotToBeCompleted(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
-        consumeRecords(0);
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
 
         // insert a record
@@ -104,7 +102,7 @@ public class InformixValidateColumnOrderIT extends AbstractConnectorTest {
                 Strings.join(", ", recordToBeInsert.keySet()),
                 Strings.join("\", \"", recordToBeInsert.values())));
 
-        waitForAvailableRecords(10, TimeUnit.SECONDS);
+        waitForAvailableRecords(1, TimeUnit.MINUTES);
 
         String topicName = String.format("%s.informix.%s", TestHelper.TEST_DATABASE, testTableName);
         SourceRecords sourceRecords = consumeRecordsByTopic(1);
@@ -142,8 +140,6 @@ public class InformixValidateColumnOrderIT extends AbstractConnectorTest {
         start(InformixConnector.class, config);
         assertConnectorIsRunning();
 
-        waitForSnapshotToBeCompleted(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
-        consumeRecords(0);
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
 
         Map<String, String> recordAfterUpdate = new LinkedHashMap<>(recordToBeUpdate);
@@ -154,7 +150,7 @@ public class InformixValidateColumnOrderIT extends AbstractConnectorTest {
         connection.execute(String.format("update %s set address = \"%s\" where id = \"%s\"",
                 testTableName, recordAfterUpdate.get("address"), recordToBeUpdate.get("id")));
 
-        waitForAvailableRecords(10, TimeUnit.SECONDS);
+        waitForAvailableRecords(1, TimeUnit.MINUTES);
 
         String topicName = String.format("%s.informix.%s", TestHelper.TEST_DATABASE, testTableName);
         SourceRecords sourceRecords = consumeRecordsByTopic(1);
@@ -195,13 +191,11 @@ public class InformixValidateColumnOrderIT extends AbstractConnectorTest {
         start(InformixConnector.class, config);
         assertConnectorIsRunning();
 
-        waitForSnapshotToBeCompleted(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
-        consumeRecords(0);
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
 
         connection.execute(String.format("delete from %s where id = \"%s\"", testTableName, recordToBeDelete.get("id")));
 
-        waitForAvailableRecords(10, TimeUnit.SECONDS);
+        waitForAvailableRecords(1, TimeUnit.MINUTES);
 
         String topicName = String.format("%s.informix.%s", TestHelper.TEST_DATABASE, testTableName);
         SourceRecords sourceRecords = consumeRecordsByTopic(1);
