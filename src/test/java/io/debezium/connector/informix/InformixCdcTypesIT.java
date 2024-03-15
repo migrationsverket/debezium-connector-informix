@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
@@ -29,13 +30,12 @@ import io.debezium.connector.informix.InformixConnectorConfig.SnapshotMode;
 import io.debezium.connector.informix.util.TestHelper;
 import io.debezium.data.SourceRecordAssert;
 import io.debezium.embedded.AbstractConnectorTest;
-import io.debezium.junit.Flaky;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.relational.RelationalDatabaseConnectorConfig.DecimalHandlingMode;
 import io.debezium.time.Date;
 import io.debezium.util.Testing;
 
-public class InformixCdcTypesIT extends AbstractConnectorTest {
+public class InformixCdcTypesIT extends AbstractAsyncEngineConnectorTest {
 
     private InformixConnection connection;
 
@@ -86,7 +86,6 @@ public class InformixCdcTypesIT extends AbstractConnectorTest {
     }
 
     @Test
-    @Flaky("DBZ-7531")
     public void testTypes() throws Exception {
 
         final Configuration config = TestHelper.defaultConfig()

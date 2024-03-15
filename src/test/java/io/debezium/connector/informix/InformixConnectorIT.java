@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
@@ -42,7 +43,6 @@ import io.debezium.data.VerifyRecord;
 import io.debezium.doc.FixFor;
 import io.debezium.embedded.AbstractConnectorTest;
 import io.debezium.junit.ConditionalFail;
-import io.debezium.junit.Flaky;
 import io.debezium.junit.logging.LogInterceptor;
 import io.debezium.relational.RelationalDatabaseSchema;
 import io.debezium.relational.history.MemorySchemaHistory;
@@ -55,7 +55,7 @@ import junit.framework.TestCase;
  * Integration test for the Debezium Informix connector.
  *
  */
-public class InformixConnectorIT extends AbstractConnectorTest {
+public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
 
     @Rule
     public TestRule conditionalFail = new ConditionalFail();
@@ -458,14 +458,12 @@ public class InformixConnectorIT extends AbstractConnectorTest {
 
     @Test
     @FixFor("DBZ-1069")
-    @Flaky("DBZ-7531")
     public void verifyOffsetsWithoutOnlineUpd() throws Exception {
         verifyOffsets(false);
     }
 
     @Test
     @FixFor("DBZ-7531")
-    @Flaky("DBZ-7531")
     public void verifyOffsetsWithOnlineUpd() throws Exception {
         verifyOffsets(true);
     }
@@ -800,21 +798,18 @@ public class InformixConnectorIT extends AbstractConnectorTest {
 
     @Test
     @FixFor("DBZ-1128")
-    @Flaky("DBZ-7539")
     public void restartInTheMiddleOfTxAfterSnapshot() throws Exception {
         restartInTheMiddleOfTx(true, false);
     }
 
     @Test
     @FixFor("DBZ-1128")
-    @Flaky("DBZ-7539")
     public void restartInTheMiddleOfTxAfterCompletedTx() throws Exception {
         restartInTheMiddleOfTx(false, true);
     }
 
     @Test
     @FixFor("DBZ-1128")
-    @Flaky("DBZ-7539")
     public void restartInTheMiddleOfTx() throws Exception {
         restartInTheMiddleOfTx(false, false);
     }
