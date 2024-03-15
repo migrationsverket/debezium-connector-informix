@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.After;
@@ -28,7 +29,7 @@ import io.debezium.data.VerifyRecord;
 import io.debezium.embedded.AbstractConnectorTest;
 import io.debezium.util.Strings;
 
-public class InformixValidateColumnOrderIT extends AbstractConnectorTest {
+public class InformixValidateColumnOrderIT extends AbstractAsyncEngineConnectorTest {
 
     private static final String testTableName = "test_column_order";
     private static final Map<String, String> testTableColumns = new LinkedHashMap<>() {

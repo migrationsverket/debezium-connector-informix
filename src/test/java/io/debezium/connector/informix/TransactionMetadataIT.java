@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.After;
@@ -27,14 +28,13 @@ import io.debezium.connector.informix.InformixConnectorConfig.SnapshotMode;
 import io.debezium.connector.informix.util.TestHelper;
 import io.debezium.embedded.AbstractConnectorTest;
 import io.debezium.junit.ConditionalFail;
-import io.debezium.junit.Flaky;
 import io.debezium.util.Collect;
 
 /**
  * Transaction metadata test for the Debezium Informix Server connector.
  *
  */
-public class TransactionMetadataIT extends AbstractConnectorTest {
+public class TransactionMetadataIT extends AbstractAsyncEngineConnectorTest {
 
     @Rule
     public TestRule conditionalFail = new ConditionalFail();
@@ -75,7 +75,6 @@ public class TransactionMetadataIT extends AbstractConnectorTest {
     }
 
     @Test
-    @Flaky("DBZ-7540")
     public void transactionMetadata() throws Exception {
         final int RECORDS_PER_TABLE = 5;
         final int ID_START = 10;
