@@ -45,7 +45,7 @@ public class InformixConnection extends JdbcConnection {
     private static final String GET_DATABASE_NAME = "select dbinfo('dbname') as dbname from systables where tabid = 1";
 
     private static final String GET_MAX_LSN = "select uniqid, used as logpage from sysmaster:syslogs where is_current = 1";
-    private static final String GET_MIN_LSN = "select min(uniqid) as uniqid , 0 as logpage from sysmaster:syslogs";
+    private static final String GET_MIN_LSN = "select min(uniqid) as uniqid, 0 as logpage from sysmaster:syslogs";
 
     private static final String GET_CURRENT_TIMESTAMP = "select sysdate as sysdate from sysmaster:sysdual";
 
@@ -100,6 +100,14 @@ public class InformixConnection extends JdbcConnection {
         }, "Maximum LSN query must return exactly one value"));
     }
 
+    public Lsn getMinLsn() throws SQLException {
+        return queryAndMap(GET_MIN_LSN, singleResultMapper(rs -> {
+            final Lsn lsn = Lsn.of(rs.getLong("uniqid"), rs.getLong("logpage") << 12);
+            LOGGER.trace("Current minimum lsn is {}", lsn.toLongString());
+            return lsn;
+        }, "Minimum LSN query must return exactly one value"));
+    }
+
     public String getRealDatabaseName() {
         return realDatabaseName;
     }
@@ -109,7 +117,7 @@ public class InformixConnection extends JdbcConnection {
             return queryAndMap(GET_DATABASE_NAME, singleResultMapper(rs -> rs.getString(1), "Could not retrieve database name"));
         }
         catch (SQLException e) {
-            throw new RuntimeException("Couldn't obtain database name", e);
+            throw new DebeziumException("Couldn't obtain database name", e);
         }
     }
 
@@ -233,26 +241,12 @@ public class InformixConnection extends JdbcConnection {
         final Lsn storedLsn = ((InformixOffsetContext) offset).getChangePosition().getCommitLsn();
 
         try {
-            final Lsn oldestLsn = getOldestLsn();
-
-            if (oldestLsn == null) {
-                return false;
-            }
-
-            LOGGER.trace("Oldest SCN in logs is '{}'", oldestLsn);
+            final Lsn oldestLsn = getMinLsn();
             return storedLsn == null || oldestLsn.compareTo(storedLsn) < 0;
         }
         catch (SQLException e) {
             throw new DebeziumException("Unable to get last available log position", e);
         }
-    }
-
-    private Lsn getOldestLsn() throws SQLException {
-        return queryAndMap(GET_MIN_LSN, singleResultMapper(rs -> {
-            final Lsn lsn = Lsn.of(rs.getLong("uniqid"), rs.getLong("logpage") << 12);
-            LOGGER.trace("Current minimum lsn is {}", lsn.toLongString());
-            return lsn;
-        }, "Minimum LSN query must return exactly one value"));
     }
 
 }
