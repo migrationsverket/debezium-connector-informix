@@ -5,12 +5,16 @@
  */
 package io.debezium.connector.informix;
 
+import java.math.BigDecimal;
+import java.sql.Types;
 import java.time.ZoneOffset;
 
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.SchemaBuilder;
 
 import io.debezium.config.CommonConnectorConfig.BinaryHandlingMode;
+import io.debezium.data.SpecialValueDecimal;
+import io.debezium.data.VariableScaleDecimal;
 import io.debezium.jdbc.JdbcValueConverters;
 import io.debezium.jdbc.TemporalPrecisionMode;
 import io.debezium.relational.Column;
@@ -41,18 +45,90 @@ public class InformixValueConverters extends JdbcValueConverters {
 
     @Override
     public SchemaBuilder schemaBuilder(Column column) {
+        logger.debug("Building schema for column {} of type {} named {} with constraints ({},{})",
+                column.name(),
+                column.jdbcType(),
+                column.typeName(),
+                column.length(),
+                column.scale());
+
         switch (column.jdbcType()) {
+            case Types.NUMERIC:
+            case Types.DECIMAL:
+                return getNumericSchema(column);
             default:
-                return super.schemaBuilder(column);
+                SchemaBuilder builder = super.schemaBuilder(column);
+                logger.debug("JdbcValueConverters returned '{}' for column '{}'", builder != null ? builder.getClass().getName() : null, column.name());
+                return builder;
         }
+    }
+
+    private SchemaBuilder getNumericSchema(Column column) {
+        if (column.scale().isPresent()) {
+            Integer scale = column.scale().get();
+
+            if (scale == 255 && decimalMode == DecimalMode.PRECISE) {
+                return VariableScaleDecimal.builder();
+            }
+
+            return super.schemaBuilder(column);
+        }
+
+        if (decimalMode == DecimalMode.PRECISE) {
+            return VariableScaleDecimal.builder();
+        }
+
+        if (column.length() == 0) {
+            // Defined as DECIMAL without specifying a length and scale, treat as DECIMAL(16)
+            return SpecialValueDecimal.builder(decimalMode, 16, -1);
+        }
+
+        return SpecialValueDecimal.builder(decimalMode, column.length(), -1);
     }
 
     @Override
     public ValueConverter converter(Column column, Field fieldDefn) {
         switch (column.jdbcType()) {
+            case Types.NUMERIC:
+            case Types.DECIMAL:
+                return getNumericConverter(column, fieldDefn);
             default:
                 return super.converter(column, fieldDefn);
         }
+    }
+
+    private ValueConverter getNumericConverter(Column column, Field fieldDefn) {
+        if (column.scale().isPresent()) {
+            Integer scale = column.scale().get();
+
+            if (scale == 255 && decimalMode == DecimalMode.PRECISE) {
+                return data -> convertVariableScale(column, fieldDefn, data);
+            }
+
+            return data -> convertNumeric(column, fieldDefn, data);
+        }
+
+        return data -> convertVariableScale(column, fieldDefn, data);
+    }
+
+    private Object convertVariableScale(Column column, Field fieldDefn, Object data) {
+        data = convertNumeric(column, fieldDefn, data); // provides default value
+
+        if (data == null) {
+            return null;
+        }
+        if (decimalMode == DecimalMode.PRECISE) {
+            if (data instanceof SpecialValueDecimal) {
+                return VariableScaleDecimal.fromLogical(fieldDefn.schema(), (SpecialValueDecimal) data);
+            }
+            else if (data instanceof BigDecimal) {
+                return VariableScaleDecimal.fromLogical(fieldDefn.schema(), (BigDecimal) data);
+            }
+        }
+        else {
+            return data;
+        }
+        return handleUnknownData(column, fieldDefn, data);
     }
 
     @Override
