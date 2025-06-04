@@ -55,6 +55,8 @@ public class TestHelper {
      */
     public static final String IS_CDC_ENABLED = "select name, is_logging, is_buff_log, is_ansi from sysmaster:sysdatabases where name='%s'";
 
+    public static final String IFX_LOCK_MODE_WAIT = "IFX_LOCK_MODE_WAIT";
+
     public static JdbcConfiguration.Builder adminJdbcConfig() {
         return JdbcConfiguration.copy(Configuration.fromSystemProperties(InformixConnectorConfig.DATABASE_CONFIG_PREFIX))
                 .withDefault(JdbcConfiguration.DATABASE, TEST_DATABASE)
@@ -70,7 +72,8 @@ public class TestHelper {
                 .withDefault(JdbcConfiguration.HOSTNAME, "localhost")
                 .withDefault(JdbcConfiguration.PORT, 9088)
                 .withDefault(JdbcConfiguration.USER, "informix")
-                .withDefault(JdbcConfiguration.PASSWORD, "in4mix");
+                .withDefault(JdbcConfiguration.PASSWORD, "in4mix")
+                .with(IFX_LOCK_MODE_WAIT, 10);
     }
 
     /**
@@ -81,7 +84,7 @@ public class TestHelper {
 
         return Configuration.copy(defaultJdbcConfig().build().map(key -> InformixConnectorConfig.DATABASE_CONFIG_PREFIX + key))
                 .with(CommonConnectorConfig.TOPIC_PREFIX, TEST_DATABASE)
-                .with(RelationalDatabaseConnectorConfig.SNAPSHOT_LOCK_TIMEOUT_MS, TimeUnit.SECONDS.toMillis(30))
+                .with(CommonConnectorConfig.DRIVER_CONFIG_PREFIX + IFX_LOCK_MODE_WAIT, 10)
                 .with(InformixConnectorConfig.SCHEMA_HISTORY, FileSchemaHistory.class)
                 .with(FileSchemaHistory.FILE_PATH, SCHEMA_HISTORY_PATH)
                 .with(InformixConnectorConfig.INCLUDE_SCHEMA_CHANGES, false)
