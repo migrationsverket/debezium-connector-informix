@@ -14,12 +14,12 @@ import java.util.Optional;
 
 import javax.sql.DataSource;
 
+import org.apache.kafka.connect.errors.RetriableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.informix.jdbc.IfxDriver;
 
-import io.debezium.DebeziumException;
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.jdbc.JdbcConfiguration;
@@ -64,7 +64,7 @@ public class InformixConnection extends JdbcConnection {
     /**
      * actual name of the database, which could differ in casing from the database name given in the connector config.
      */
-    private final String realDatabaseName;
+    private volatile String realDatabaseName;
 
     /**
      * Creates a new connection using the supplied configuration.
@@ -73,7 +73,6 @@ public class InformixConnection extends JdbcConnection {
      */
     public InformixConnection(JdbcConfiguration config) {
         super(config, FACTORY, QUOTED_CHARACTER, QUOTED_CHARACTER);
-        realDatabaseName = retrieveRealDatabaseName().trim();
     }
 
     private String retrieveRealDatabaseName() {
@@ -81,11 +80,18 @@ public class InformixConnection extends JdbcConnection {
             return queryAndMap(GET_DATABASE_NAME, singleResultMapper(rs -> rs.getString(1), "Could not retrieve database name"));
         }
         catch (SQLException e) {
-            throw new DebeziumException("Couldn't obtain database name", e);
+            throw new RetriableException("Couldn't obtain database name", e);
         }
     }
 
     public String getRealDatabaseName() {
+        if (realDatabaseName == null) {
+            synchronized (this) {
+                if (realDatabaseName == null) {
+                    realDatabaseName = retrieveRealDatabaseName().trim();
+                }
+            }
+        }
         return realDatabaseName;
     }
 
@@ -135,7 +141,7 @@ public class InformixConnection extends JdbcConnection {
             return restartLsn.isAvailable() && minLsn.isAvailable() && restartLsn.compareTo(minLsn) >= 0;
         }
         catch (SQLException e) {
-            throw new DebeziumException("Couldn't obtain lowest available Log Sequence Number", e);
+            throw new RetriableException("Couldn't obtain lowest available Log Sequence Number", e);
         }
     }
 
