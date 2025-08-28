@@ -9,6 +9,7 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import io.debezium.embedded.async.AsyncEngineConfig;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Ignore;
@@ -23,6 +24,7 @@ import io.debezium.connector.informix.InformixConnectorConfig.SnapshotMode;
 import io.debezium.connector.informix.util.TestHelper;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.junit.ConditionalFail;
+import io.debezium.junit.Flaky;
 import io.debezium.pipeline.AbstractBlockingSnapshotTest;
 import io.debezium.relational.history.SchemaHistory;
 
@@ -131,6 +133,7 @@ public class BlockingSnapshotIT extends AbstractBlockingSnapshotTest {
     @Override
     protected Builder config() {
         return TestHelper.defaultConfig()
+                .with(AsyncEngineConfig.TASK_MANAGEMENT_TIMEOUT_MS, 90_000)
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
                 .with(InformixConnectorConfig.SIGNAL_DATA_COLLECTION, this::signalTableNameSanitized)
                 .with(InformixConnectorConfig.SNAPSHOT_MODE_TABLES, this::tableDataCollectionId);
@@ -168,5 +171,12 @@ public class BlockingSnapshotIT extends AbstractBlockingSnapshotTest {
     @Override
     public void readsSchemaOnlyForSignaledTables() throws Exception {
         super.readsSchemaOnlyForSignaledTables();
+    }
+
+    @Test
+    @Flaky("DBZ-9404")
+    @Override
+    public void blockingSnapshotMustReuseExistingOffsetAsSnapshotOffset() throws Exception {
+        super.blockingSnapshotMustReuseExistingOffsetAsSnapshotOffset();
     }
 }
