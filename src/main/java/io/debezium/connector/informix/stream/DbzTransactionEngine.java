@@ -22,6 +22,12 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
+
+import javax.cache.Cache;
+import javax.cache.CacheManager;
+import javax.cache.Caching;
+import javax.cache.spi.CachingProvider;
 
 import javax.sql.DataSource;
 
@@ -51,14 +57,14 @@ public class DbzTransactionEngine implements TransactionEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(DbzTransactionEngine.class);
     private static final String PROCESSING_RECORD = "Processing {} record";
     private static final String MISSING_TRANSACTION_START_FOR_RECORD = "Missing transaction start for record: {}";
-
+    protected final CacheManager cacheManager;
     protected final Builder builder;
     protected final DbzCDCEngine engine;
     protected final ChangeEventSourceContext context;
     protected boolean returnEmptyTransactions;
     protected EnumSet<StreamRecordType> operationFilters;
     protected EnumSet<StreamRecordType> transactionFilters;
-    protected final Map<Integer, TransactionHolder> transactionMap;
+    protected Cache<Integer, TransactionHolder> transactionCache;
     protected Map<String, TableId> tableIdByLabelId;
 
     public static Builder builder(DataSource dataSource) {
@@ -66,13 +72,14 @@ public class DbzTransactionEngine implements TransactionEngine {
     }
 
     protected DbzTransactionEngine(Builder builder) {
+        CachingProvider cachingProvider = Caching.getCachingProvider();
+        this.cacheManager = cachingProvider.getCacheManager();
         this.builder = builder;
         this.engine = builder.engine;
         this.context = builder.context;
         this.returnEmptyTransactions = builder.returnEmptyTransactions;
         this.operationFilters = EnumSet.of(INSERT, DELETE, BEFORE_UPDATE, AFTER_UPDATE, TRUNCATE);
         this.transactionFilters = EnumSet.of(COMMIT, ROLLBACK);
-        this.transactionMap = new ConcurrentSkipListMap<>();
     }
 
     @Override
@@ -86,7 +93,7 @@ public class DbzTransactionEngine implements TransactionEngine {
     }
 
     StreamRecord processRecord(StreamRecord streamRecord) {
-        TransactionHolder holder = transactionMap.get(streamRecord.getTransactionId());
+        TransactionHolder holder = transactionCache.get(streamRecord.getTransactionId());
         if (holder != null) {
             LOGGER.debug("Processing [{}] record for transaction id: {}", streamRecord.getType(), streamRecord.getTransactionId());
         }
@@ -94,7 +101,7 @@ public class DbzTransactionEngine implements TransactionEngine {
             case BEGIN -> {
                 holder = new TransactionHolder();
                 holder.beginRecord = (CDCBeginTransactionRecord) streamRecord;
-                transactionMap.put(streamRecord.getTransactionId(), holder);
+                transactionCache.put(streamRecord.getTransactionId(), holder);
                 LOGGER.debug("Watching transaction id: {}", streamRecord.getTransactionId());
             }
             case INSERT, DELETE, BEFORE_UPDATE, AFTER_UPDATE, TRUNCATE -> {
@@ -135,7 +142,7 @@ public class DbzTransactionEngine implements TransactionEngine {
             default -> LOGGER.warn("Unknown operation for record: {}", streamRecord);
         }
         if (holder != null && holder.closingRecord != null) {
-            transactionMap.remove(streamRecord.getTransactionId());
+            transactionCache.remove(streamRecord.getTransactionId());
             if (!holder.records.isEmpty() || returnEmptyTransactions) {
                 return new InformixStreamTransactionRecord(holder.beginRecord, holder.closingRecord, holder.records);
             }
@@ -177,6 +184,8 @@ public class DbzTransactionEngine implements TransactionEngine {
     public void init() throws StreamException {
         engine.init();
 
+        transactionCache = cacheManager.getCache("TransactionCache");
+
         /*
          * Build Map of Label_id to TableId.
          */
@@ -189,10 +198,15 @@ public class DbzTransactionEngine implements TransactionEngine {
     @Override
     public void close() {
         engine.close();
+
+        transactionCache.close();
     }
 
     public OptionalLong getLowestBeginSequence() {
-        return transactionMap.values().stream().mapToLong(t -> t.beginRecord.getSequenceId()).min();
+//        return transactionMap.values().stream().mapToLong(t -> t.beginRecord.getSequenceId()).min();
+        return StreamSupport.stream(transactionCache.spliterator(), true)
+                .map(Cache.Entry::getValue)
+                .mapToLong(t -> t.beginRecord.getSequenceId()).min();
     }
 
     public Map<String, TableId> getTableIdByLabelId() {
