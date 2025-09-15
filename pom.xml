@@ -501,6 +501,7 @@
                                 <image>
                                     <run>
                                         <env>
+                                            <SIZE>medium</SIZE>
                                             <DBDATE>MDY2.</DBDATE>
                                             <DBCENTURY>C</DBCENTURY>
                                         </env>
