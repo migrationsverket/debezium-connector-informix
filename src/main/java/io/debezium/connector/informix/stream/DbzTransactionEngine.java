@@ -13,6 +13,8 @@ import static com.informix.jdbc.stream.api.StreamRecordType.INSERT;
 import static com.informix.jdbc.stream.api.StreamRecordType.ROLLBACK;
 import static com.informix.jdbc.stream.api.StreamRecordType.TRUNCATE;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -27,7 +29,6 @@ import java.util.stream.StreamSupport;
 import javax.cache.Cache;
 import javax.cache.CacheManager;
 import javax.cache.Caching;
-import javax.cache.spi.CachingProvider;
 
 import javax.sql.DataSource;
 
@@ -58,6 +59,7 @@ public class DbzTransactionEngine implements TransactionEngine {
     private static final String PROCESSING_RECORD = "Processing {} record";
     private static final String MISSING_TRANSACTION_START_FOR_RECORD = "Missing transaction start for record: {}";
     protected final CacheManager cacheManager;
+    protected final InformixConnectorConfig connectorConfig;
     protected final Builder builder;
     protected final DbzCDCEngine engine;
     protected final ChangeEventSourceContext context;
@@ -72,8 +74,16 @@ public class DbzTransactionEngine implements TransactionEngine {
     }
 
     protected DbzTransactionEngine(Builder builder) {
-        CachingProvider cachingProvider = Caching.getCachingProvider();
-        this.cacheManager = cachingProvider.getCacheManager();
+        this.connectorConfig = connectorConfig;
+        CacheManager cacheManager;
+        try {
+            URI jCacheUri = this.getClass().getClassLoader().getResource(connectorConfig.getJCacheUri()).toURI();
+            cacheManager = Caching.getCachingProvider(connectorConfig.getJCacheProviderClassName()).getCacheManager(jCacheUri, null);
+        }
+        catch (URISyntaxException e) {
+            cacheManager = Caching.getCachingProvider().getCacheManager();
+        }
+        this.cacheManager = cacheManager;
         this.builder = builder;
         this.engine = builder.engine;
         this.context = builder.context;
@@ -184,7 +194,7 @@ public class DbzTransactionEngine implements TransactionEngine {
     public void init() throws StreamException {
         engine.init();
 
-        transactionCache = cacheManager.getCache("TransactionCache");
+        transactionCache = cacheManager.getCache(connectorConfig.getTransactionCacheName());
 
         /*
          * Build Map of Label_id to TableId.
@@ -200,6 +210,8 @@ public class DbzTransactionEngine implements TransactionEngine {
         engine.close();
 
         transactionCache.close();
+
+        cacheManager.close();
     }
 
     public OptionalLong getLowestBeginSequence() {
