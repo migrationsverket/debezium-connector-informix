@@ -405,6 +405,7 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 5))
             .withWidth(Width.MEDIUM)
             .withImportance(Importance.MEDIUM)
+            .withDescription("JCache Provider Classname, for caching transactions in a potentially distributed or disk offloading cache instead of heap memory.")
             .withDefault(DEFAULT_JCACHE_PROVIDER_CLASSNAME);
 
     public static final Field JCACHE_URI = Field.create("javax.cache.uri")
@@ -413,6 +414,7 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 6))
             .withWidth(Width.MEDIUM)
             .withImportance(Importance.MEDIUM)
+            .withDescription("URI of configuration resource for JCache Provider.")
             .withDefault(DEFAULT_JCACHE_URI);
 
     public static final Field TRANSACTION_CACHE_NAME = Field.create("transaction.cache.name")
@@ -421,6 +423,7 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 7))
             .withWidth(Width.MEDIUM)
             .withImportance(Importance.MEDIUM)
+            .withDescription("Name of transaction cache configured in JCache URI resource.")
             .withDefault(DEFAULT_TRANSACTION_CACHE_NAME);
 
     public static final Field SOURCE_INFO_STRUCT_MAKER = CommonConnectorConfig.SOURCE_INFO_STRUCT_MAKER
