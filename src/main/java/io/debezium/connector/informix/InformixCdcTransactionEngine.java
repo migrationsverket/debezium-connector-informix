@@ -20,6 +20,8 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -28,6 +30,8 @@ import java.util.stream.StreamSupport;
 import javax.cache.Cache;
 import javax.cache.CacheManager;
 import javax.cache.Caching;
+import javax.cache.configuration.MutableConfiguration;
+import javax.cache.spi.CachingProvider;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +57,7 @@ public class InformixCdcTransactionEngine implements IfxTransactionEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(InformixCdcTransactionEngine.class);
     private static final String PROCESSING_RECORD = "Processing {} record";
     private static final String MISSING_TRANSACTION_START_FOR_RECORD = "Missing transaction start for record: {}";
+    protected final CachingProvider cachingProvider;
     protected final CacheManager cacheManager;
     protected final ChangeEventSourceContext context;
     protected final IfxCDCEngine engine;
@@ -65,15 +70,16 @@ public class InformixCdcTransactionEngine implements IfxTransactionEngine {
 
     public InformixCdcTransactionEngine(ChangeEventSourceContext context, IfxCDCEngine engine, InformixConnectorConfig connectorConfig) {
         this.connectorConfig = connectorConfig;
-        CacheManager cacheManager;
-        try {
-            URI jCacheUri = this.getClass().getClassLoader().getResource(connectorConfig.getJCacheUri()).toURI();
-            cacheManager = Caching.getCachingProvider(connectorConfig.getJCacheProviderClassName()).getCacheManager(jCacheUri, null);
-        }
-        catch (URISyntaxException e) {
-            cacheManager = Caching.getCachingProvider().getCacheManager();
-        }
-        this.cacheManager = cacheManager;
+        this.cachingProvider = Optional.ofNullable(connectorConfig.getJCacheProviderClassName()).map(Caching::getCachingProvider).orElseGet(Caching::getCachingProvider);
+        Optional<URI> jCacheURI = Optional.ofNullable(connectorConfig.getJCacheUri()).map(ClassLoader::getSystemResource).map(url -> {
+            try {
+                return url.toURI();
+            }
+            catch (URISyntaxException e) {
+                return null;
+            }
+        });
+        this.cacheManager = jCacheURI.map(uri -> cachingProvider.getCacheManager(uri, null)).orElseGet(cachingProvider::getCacheManager);
         this.context = context;
         this.engine = engine;
     }
@@ -181,7 +187,8 @@ public class InformixCdcTransactionEngine implements IfxTransactionEngine {
     public void init() throws SQLException, IfxStreamException {
         engine.init();
 
-        transactionCache = cacheManager.getCache(connectorConfig.getTransactionCacheName());
+        transactionCache = Objects.requireNonNullElseGet(cacheManager.getCache(connectorConfig.getTransactionCacheName()),
+                () -> cacheManager.createCache(connectorConfig.getTransactionCacheName(), new MutableConfiguration<>()));
 
         /*
          * Build Map of Label_id to TableId.
@@ -194,12 +201,12 @@ public class InformixCdcTransactionEngine implements IfxTransactionEngine {
 
     @Override
     public void close() throws IfxStreamException {
-        if (engine != null)
+        if (engine != null) {
             engine.close();
-        if (transactionCache != null)
-            transactionCache.close();
-        if (cacheManager != null)
-            cacheManager.close();
+        }
+        if (cachingProvider != null) {
+            cachingProvider.close();
+        }
     }
 
     public OptionalLong getLowestBeginSequence() {
