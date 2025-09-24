@@ -15,9 +15,7 @@ import static com.informix.jdbc.stream.api.StreamRecordType.TRUNCATE;
 
 import java.net.URI;
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
