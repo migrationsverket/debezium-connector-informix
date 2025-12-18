@@ -46,7 +46,6 @@ import io.debezium.heartbeat.DatabaseHeartbeatImpl;
 import io.debezium.heartbeat.Heartbeat;
 import io.debezium.jdbc.JdbcValueConverters.DecimalMode;
 import io.debezium.junit.ConditionalFailExtension;
-import io.debezium.junit.Flaky;
 import io.debezium.junit.logging.LogInterceptor;
 import io.debezium.relational.RelationalDatabaseSchema;
 import io.debezium.relational.history.MemorySchemaHistory;
@@ -79,7 +78,7 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                 "CREATE TABLE truncated_column_table (id int not null, name varchar(20), primary key (id))",
                 "CREATE TABLE truncate_table (id int not null, name varchar(20), primary key (id))",
                 "CREATE TABLE dt_table (id int not null, c1 int, c2 int, c3a numeric(5,2), c3b varchar(128), f1 float(14), f2 decimal(8,4), primary key(id))",
-                "CREATE TABLE always_snapshot (id int primary key not null, data varchar(50) not null)",
+                "CREATE TABLE always_snapshot (id int not null, data varchar(50) not null, primary key(id))",
                 "CREATE TABLE test_heartbeat_table (text varchar(255))",
                 "INSERT INTO tablea VALUES(1, 'a')");
         initializeConnectorTestFramework();
@@ -473,7 +472,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         final int ID_RESTART = 100;
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
-                .with(InformixConnectorConfig.CDC_TIMEOUT, 5)
                 .with(InformixConnectorConfig.CDC_BUFFERSIZE, 0x800)
                 .build();
 
@@ -654,15 +652,15 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
     public void testColumnIncludeList(SnapshotMode snapshotMode) throws Exception {
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, snapshotMode)
+                .with(InformixConnectorConfig.STORE_ONLY_CAPTURED_TABLES_DDL, true)
                 .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, "testdb.informix.dt_table")
-                .with(InformixConnectorConfig.COLUMN_INCLUDE_LIST,
-                        "informix.dt_table.id,informix.dt_table.c1,informix.dt_table.c2,informix.dt_table.c3a,informix.dt_table.c3b")
+                .with(InformixConnectorConfig.COLUMN_INCLUDE_LIST, "informix.dt_table.id,informix.dt_table.c1,informix.dt_table.c3a,informix.dt_table.f1")
                 .build();
 
         final int expectedRecords;
         if (snapshotMode == SnapshotMode.INITIAL) {
             expectedRecords = 2;
-            connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (0,123,456,789.01,'test',1.228,234.56)");
+            connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (0,123,456,789.01,'test',1.228,2.3456)");
         }
         else {
             expectedRecords = 1;
@@ -677,7 +675,7 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         // Wait for streaming to start
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
 
-        connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (1,123,456,789.01,'test',1.228,234.56)");
+        connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (1,123,456,789.01,'test',1.228,2.3456)");
 
         waitForAvailableRecords();
 
@@ -688,15 +686,13 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                 .name("testdb.informix.dt_table.Value")
                 .field("id", Schema.INT32_SCHEMA)
                 .field("c1", Schema.OPTIONAL_INT32_SCHEMA)
-                .field("c2", Schema.OPTIONAL_INT32_SCHEMA)
                 .field("c3a", SpecialValueDecimal.builder(DecimalMode.PRECISE, 5, 2).optional().build())
-                .field("c3b", Schema.OPTIONAL_STRING_SCHEMA)
+                .field("f1", Schema.OPTIONAL_FLOAT64_SCHEMA)
                 .build();
         Struct aStruct = new Struct(aSchema)
                 .put("c1", 123)
-                .put("c2", 456)
                 .put("c3a", BigDecimal.valueOf(789.01))
-                .put("c3b", "test");
+                .put("f1", 1.228);
         if (snapshotMode == SnapshotMode.INITIAL) {
             SourceRecordAssert.assertThat(table.get(0)).valueAfterFieldIsEqualTo(aStruct.put("id", 0));
             SourceRecordAssert.assertThat(table.get(1)).valueAfterFieldIsEqualTo(aStruct.put("id", 1));
@@ -723,14 +719,15 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
     public void testColumnExcludeList(SnapshotMode snapshotMode) throws Exception {
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, snapshotMode)
+                .with(InformixConnectorConfig.STORE_ONLY_CAPTURED_TABLES_DDL, true)
                 .with(InformixConnectorConfig.TABLE_EXCLUDE_LIST, "testdb.informix.tablea")
-                .with(InformixConnectorConfig.COLUMN_EXCLUDE_LIST, "informix.dt_table.f1,informix.dt_table.f2")
+                .with(InformixConnectorConfig.COLUMN_EXCLUDE_LIST, "informix.dt_table.c1,informix.dt_table.c3a,informix.dt_table.f1")
                 .build();
 
         final int expectedRecords;
         if (snapshotMode == SnapshotMode.INITIAL) {
             expectedRecords = 2;
-            connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (0,123,456,789.01,'test',1.228,234.56)");
+            connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (0,123,456,789.01,'test',1.228,2.3456)");
         }
         else {
             expectedRecords = 1;
@@ -745,7 +742,7 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         // Wait for streaming to start
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
 
-        connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (1,123,456,789.01,'test',1.228,234.56)");
+        connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (1,123,456,789.01,'test',1.228,2.3456)");
 
         waitForAvailableRecords();
 
@@ -755,16 +752,14 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         Schema aSchema = SchemaBuilder.struct().optional()
                 .name("testdb.informix.dt_table.Value")
                 .field("id", Schema.INT32_SCHEMA)
-                .field("c1", Schema.OPTIONAL_INT32_SCHEMA)
                 .field("c2", Schema.OPTIONAL_INT32_SCHEMA)
-                .field("c3a", SpecialValueDecimal.builder(DecimalMode.PRECISE, 5, 2).optional().build())
                 .field("c3b", Schema.OPTIONAL_STRING_SCHEMA)
+                .field("f2", SpecialValueDecimal.builder(DecimalMode.PRECISE, 8, 4).optional().build())
                 .build();
         Struct aStruct = new Struct(aSchema)
-                .put("c1", 123)
                 .put("c2", 456)
-                .put("c3a", BigDecimal.valueOf(789.01))
-                .put("c3b", "test");
+                .put("c3b", "test")
+                .put("f2", BigDecimal.valueOf(2.3456));
         if (snapshotMode == SnapshotMode.INITIAL) {
             SourceRecordAssert.assertThat(table.get(0)).valueAfterFieldIsEqualTo(aStruct.put("id", 0));
             SourceRecordAssert.assertThat(table.get(1)).valueAfterFieldIsEqualTo(aStruct.put("id", 1));
@@ -784,7 +779,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         final int HALF_ID = ID_START + RECORDS_PER_TABLE / 2;
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
-                .with(InformixConnectorConfig.CDC_TIMEOUT, 5)
                 .with(InformixConnectorConfig.CDC_BUFFERSIZE, 0x800)
                 .build();
 
@@ -931,21 +925,18 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
     }
 
     @Test
-    @Flaky("DBZ-8114")
     @FixFor("DBZ-1128")
     public void restartInTheMiddleOfTxAfterSnapshot() throws Exception {
         restartInTheMiddleOfTx(true, false);
     }
 
     @Test
-    @Flaky("DBZ-8114")
     @FixFor("DBZ-1128")
     public void restartInTheMiddleOfTxAfterCompletedTx() throws Exception {
         restartInTheMiddleOfTx(false, true);
     }
 
     @Test
-    @Flaky("DBZ-8114")
     @FixFor("DBZ-1128")
     public void restartInTheMiddleOfTx() throws Exception {
         restartInTheMiddleOfTx(false, false);
@@ -1135,9 +1126,8 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         assertNoRecordsToConsume();
 
         for (SourceRecord record : tablea) {
-            CloudEventsConverterTest.shouldConvertToCloudEventsInJson(record, false, jsonNode -> {
-                assertThat(jsonNode.get(CloudEventsMaker.FieldName.ID).asText()).contains("commit_lsn:");
-            });
+            CloudEventsConverterTest.shouldConvertToCloudEventsInJson(record, false,
+                    jsonNode -> assertThat(jsonNode.get(CloudEventsMaker.FieldName.ID).asText()).contains("commit_lsn:"));
             CloudEventsConverterTest.shouldConvertToCloudEventsInJsonWithDataAsAvro(record, false);
             CloudEventsConverterTest.shouldConvertToCloudEventsInAvro(record, "informix", TestHelper.TEST_DATABASE, false);
         }
@@ -1324,7 +1314,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
     }
 
     @Test()
-    @Flaky("DBZ-9081")
     @FixFor("DBZ-9081")
     public void testHeartbeatExecuted() throws Exception {
         final Configuration config = TestHelper.defaultConfig()
@@ -1350,7 +1339,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
     }
 
     @Test()
-    @Flaky("DBZ-9081")
     @FixFor("DBZ-9081")
     public void testHeartbeatActionQueryExecuted() throws Exception {
         final Configuration config = TestHelper.defaultConfig()
