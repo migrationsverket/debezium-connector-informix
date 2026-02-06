@@ -18,8 +18,6 @@ import org.slf4j.LoggerFactory;
 import com.informix.jdbc.IfmxReadableType;
 import com.informix.stream.api.IfmxStreamOperationRecord;
 import com.informix.stream.api.IfmxStreamRecord;
-import com.informix.stream.api.IfmxStreamRecordType;
-import com.informix.stream.cdc.IfxCDCEngine;
 import com.informix.stream.cdc.records.IfxCDCBeginTransactionRecord;
 import com.informix.stream.cdc.records.IfxCDCCommitTransactionRecord;
 import com.informix.stream.cdc.records.IfxCDCMetaDataRecord;
@@ -232,21 +230,16 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         return effectiveOffsetContext;
     }
 
-    public InformixCdcTransactionEngine getTransactionEngine(ChangeEventSourceContext context,
-                                                             InformixDatabaseSchema schema,
-                                                             Lsn startLsn)
+    private InformixCdcTransactionEngine getTransactionEngine(ChangeEventSourceContext context, InformixDatabaseSchema schema, Lsn startLsn)
             throws SQLException {
-        return new InformixCdcTransactionEngine(context, getCDCEngine(schema, startLsn))
-                .returnEmptyTransactions(connectorConfig.returnEmptytransactions());
-    }
-
-    private IfxCDCEngine getCDCEngine(InformixDatabaseSchema schema, Lsn startLsn) throws SQLException {
-        IfxCDCEngine.Builder builder = IfxCDCEngine
-                .builder(dataConnection.datasource())
+        InformixCdcTransactionEngine.Builder builder = InformixCdcTransactionEngine
+                .builder(dataConnection)
                 .buffer(connectorConfig.getCdcBuffersize())
                 .maxRecords(connectorConfig.getCdcMaxRecords())
                 .timeout(connectorConfig.getCdcTimeout())
-                .stopLoggingOnClose(connectorConfig.stopLoggingOnClose());
+                .stopLoggingOnClose(connectorConfig.stopLoggingOnClose())
+                .returnEmptyTransactions(connectorConfig.returnEmptytransactions())
+                .context(context);
 
         schema.tableIds().forEach((TableId tid) -> {
             String[] colNames = schema.tableFor(tid).retrieveColumnNames().stream().map(dataConnection::quoteIdentifier).toArray(String[]::new);
@@ -293,129 +286,129 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         LOGGER.debug("Received {} Time [{}] UserId [{}] ElapsedT [{}ms]",
                 beginRecord, beginTs, beginRecord.getUserId(), (end - start) / 1000000d);
 
-        if (IfmxStreamRecordType.COMMIT.equals(endRecord.getType())) {
-            IfxCDCCommitTransactionRecord commitRecord = (IfxCDCCommitTransactionRecord) endRecord;
-            long commitSeq = endSeq;
-            long commitTs = commitRecord.getTime();
+        switch (endRecord.getType()) {
+            case COMMIT -> {
+                IfxCDCCommitTransactionRecord commitRecord = (IfxCDCCommitTransactionRecord) endRecord;
+                long commitTs = commitRecord.getTime();
 
-            Map<String, IfmxReadableType> before = null;
-            Map<String, TableId> label2TableId = engine.getTableIdByLabelId();
+                Map<String, IfmxReadableType> before = null;
+                Map<String, TableId> label2TableId = engine.getTableIdByLabelId();
 
-            dispatcher.dispatchTransactionStartedEvent(
-                    partition,
-                    String.valueOf(transactionId),
-                    offsetContext,
-                    Instant.ofEpochSecond(beginTs));
+                dispatcher.dispatchTransactionStartedEvent(
+                        partition,
+                        String.valueOf(transactionId),
+                        offsetContext,
+                        Instant.ofEpochSecond(beginTs));
 
-            for (IfmxStreamRecord streamRecord : transactionRecord.getRecords()) {
+                for (IfmxStreamRecord streamRecord : transactionRecord.getRecords()) {
+                    start = System.nanoTime();
+
+                    long changeSeq = streamRecord.getSequenceId();
+
+                    if (recover && changeSeq <= lastChangeSeq) {
+                        LOGGER.info("Skipping already processed record {}", changeSeq);
+                        continue;
+                    }
+
+                    Optional<TableId> tableId = Optional.ofNullable(streamRecord.getLabel()).map(label2TableId::get);
+
+                    Map<String, IfmxReadableType> after;
+
+                    updateChangePosition(offsetContext, null, changeSeq, transactionId, null);
+
+                    switch (streamRecord.getType()) {
+                        case INSERT -> {
+
+                            after = ((IfmxStreamOperationRecord) streamRecord).getData();
+
+                            handleOperation(partition, offsetContext, tableId.orElseThrow(), Operation.CREATE, null, after);
+
+                            end = System.nanoTime();
+
+                            LOGGER.debug("Received {} ElapsedT [{}ms] Data After [{}]",
+                                    streamRecord, (end - start) / 1000000d, after);
+                        }
+                        case BEFORE_UPDATE -> {
+
+                            before = ((IfmxStreamOperationRecord) streamRecord).getData();
+
+                            end = System.nanoTime();
+
+                            LOGGER.debug("Received {} ElapsedT [{}ms] Data Before [{}]",
+                                    streamRecord, (end - start) / 1000000d, before);
+                        }
+                        case AFTER_UPDATE -> {
+
+                            after = ((IfmxStreamOperationRecord) streamRecord).getData();
+
+                            handleOperation(partition, offsetContext, tableId.orElseThrow(), Operation.UPDATE, before, after);
+
+                            end = System.nanoTime();
+
+                            LOGGER.debug("Received {} ElapsedT [{}ms] Data Before [{}] Data After [{}]",
+                                    streamRecord, (end - start) / 1000000d, before, after);
+                        }
+                        case DELETE -> {
+
+                            before = ((IfmxStreamOperationRecord) streamRecord).getData();
+
+                            handleOperation(partition, offsetContext, tableId.orElseThrow(), Operation.DELETE, before, null);
+
+                            end = System.nanoTime();
+
+                            LOGGER.debug("Received {} ElapsedT [{}ms] Data Before [{}]",
+                                    streamRecord, (end - start) / 1000000d, before);
+                        }
+                        case TRUNCATE -> {
+                            /*
+                             * According to IBM documentation the 'User data' field of the CDC_REC_TRUNCATE record header contains the
+                             * table identifier, otherwise placed in the IfxCDCRecord 'label' field. For unknown reasons, this is
+                             * instead placed in the 'userId' field?
+                             */
+                            IfxCDCTruncateRecord truncateRecord = (IfxCDCTruncateRecord) streamRecord;
+                            tableId = Optional.of(truncateRecord.getUserId()).map(Number::toString).map(label2TableId::get);
+
+                            handleOperation(partition, offsetContext, tableId.orElseThrow(), Operation.TRUNCATE, null, null);
+
+                            LOGGER.debug(RECEIVED_GENERIC_RECORD, streamRecord, (end - start) / 1000000d);
+                        }
+                        case METADATA, TIMEOUT, ERROR -> {
+                            end = System.nanoTime();
+
+                            LOGGER.debug(RECEIVED_GENERIC_RECORD, streamRecord, (end - start) / 1000000d);
+                        }
+                        default -> {
+                            end = System.nanoTime();
+
+                            LOGGER.debug(RECEIVED_UNKNOWN_RECORD_TYPE, streamRecord, (end - start) / 1000000d);
+                        }
+                    }
+                }
+
                 start = System.nanoTime();
 
-                long changeSeq = streamRecord.getSequenceId();
-
-                if (recover && changeSeq <= lastChangeSeq) {
-                    LOGGER.info("Skipping already processed record {}", changeSeq);
-                    continue;
-                }
-
-                Optional<TableId> tableId = Optional.ofNullable(streamRecord.getLabel()).map(label2TableId::get);
-
-                Map<String, IfmxReadableType> after;
-
-                updateChangePosition(offsetContext, null, changeSeq, transactionId, null);
-
-                switch (streamRecord.getType()) {
-                    case INSERT:
-
-                        after = ((IfmxStreamOperationRecord) streamRecord).getData();
-
-                        handleOperation(partition, offsetContext, Operation.CREATE, null, after, tableId.orElseThrow());
-
-                        end = System.nanoTime();
-
-                        LOGGER.debug("Received {} ElapsedT [{}ms] Data After [{}]",
-                                streamRecord, (end - start) / 1000000d, after);
-                        break;
-                    case BEFORE_UPDATE:
-
-                        before = ((IfmxStreamOperationRecord) streamRecord).getData();
-
-                        end = System.nanoTime();
-
-                        LOGGER.debug("Received {} ElapsedT [{}ms] Data Before [{}]",
-                                streamRecord, (end - start) / 1000000d, before);
-                        break;
-                    case AFTER_UPDATE:
-
-                        after = ((IfmxStreamOperationRecord) streamRecord).getData();
-
-                        handleOperation(partition, offsetContext, Operation.UPDATE, before, after, tableId.orElseThrow());
-
-                        end = System.nanoTime();
-
-                        LOGGER.debug("Received {} ElapsedT [{}ms] Data Before [{}] Data After [{}]",
-                                streamRecord, (end - start) / 1000000d, before, after);
-                        break;
-                    case DELETE:
-
-                        before = ((IfmxStreamOperationRecord) streamRecord).getData();
-
-                        handleOperation(partition, offsetContext, Operation.DELETE, before, null, tableId.orElseThrow());
-
-                        end = System.nanoTime();
-
-                        LOGGER.debug("Received {} ElapsedT [{}ms] Data Before [{}]",
-                                streamRecord, (end - start) / 1000000d, before);
-                        break;
-                    case TRUNCATE:
-                        /*
-                         * According to IBM documentation the 'User data' field of the CDC_REC_TRUNCATE record header contains the
-                         * table identifier, otherwise placed in the IfxCDCRecord 'label' field. For unknown reasons, this is
-                         * instead placed in the 'userId' field?
-                         */
-                        IfxCDCTruncateRecord truncateRecord = (IfxCDCTruncateRecord) streamRecord;
-                        tableId = Optional.of(truncateRecord.getUserId()).map(Number::toString).map(label2TableId::get);
-
-                        handleOperation(partition, offsetContext, Operation.TRUNCATE, null, null, tableId.orElseThrow());
-
-                        LOGGER.debug(RECEIVED_GENERIC_RECORD, streamRecord, (end - start) / 1000000d);
-                        break;
-                    case METADATA:
-                    case TIMEOUT:
-                    case ERROR:
-                        end = System.nanoTime();
-
-                        LOGGER.debug(RECEIVED_GENERIC_RECORD, streamRecord, (end - start) / 1000000d);
-                        break;
-                    default:
-                        end = System.nanoTime();
-
-                        LOGGER.debug(RECEIVED_UNKNOWN_RECORD_TYPE, streamRecord, (end - start) / 1000000d);
-                }
-            }
-
-            start = System.nanoTime();
-
-            updateChangePosition(offsetContext, commitSeq, commitSeq, transactionId, restartSeq);
-            dispatcher.dispatchTransactionCommittedEvent(partition, offsetContext, Instant.ofEpochSecond(commitTs));
-
-            end = System.nanoTime();
-
-            LOGGER.debug("Received {} Time [{}] UserId [{}] ElapsedT [{}ms]",
-                    endRecord, commitTs, beginRecord.getUserId(), (end - start) / 1000000d);
-
-            LOGGER.debug("Handle Transaction Events [{}], ElapsedT [{}ms]",
-                    transactionRecord.getRecords().size(), (end - tStart) / 1000000d);
-        }
-        if (IfmxStreamRecordType.ROLLBACK.equals(endRecord.getType())) {
-
-            if (!recover) {
                 updateChangePosition(offsetContext, endSeq, endSeq, transactionId, restartSeq);
-                offsetContext.getTransactionContext().endTransaction();
+                dispatcher.dispatchTransactionCommittedEvent(partition, offsetContext, Instant.ofEpochSecond(commitTs));
+
+                end = System.nanoTime();
+
+                LOGGER.debug("Received {} Time [{}] UserId [{}] ElapsedT [{}ms]",
+                        endRecord, commitTs, beginRecord.getUserId(), (end - start) / 1000000d);
+
+                LOGGER.debug("Handle Transaction Events [{}], ElapsedT [{}ms]",
+                        transactionRecord.getRecords().size(), (end - tStart) / 1000000d);
             }
+            case ROLLBACK -> {
 
-            end = System.nanoTime();
+                if (!recover) {
+                    updateChangePosition(offsetContext, endSeq, endSeq, transactionId, restartSeq);
+                    offsetContext.getTransactionContext().endTransaction();
+                }
 
-            LOGGER.debug(RECEIVED_GENERIC_RECORD, endRecord, (end - start) / 1000000d);
+                end = System.nanoTime();
+
+                LOGGER.debug(RECEIVED_GENERIC_RECORD, endRecord, (end - start) / 1000000d);
+            }
         }
     }
 
@@ -443,8 +436,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         LOGGER.debug(RECEIVED_GENERIC_RECORD, metaDataRecord, (end - start) / 1000000d);
     }
 
-    private void updateChangePosition(InformixOffsetContext offsetContext,
-                                      Long commitSeq, Long changeSeq, Integer transactionId, Long beginSeq) {
+    private void updateChangePosition(InformixOffsetContext offsetContext, Long commitSeq, Long changeSeq, Integer transactionId, Long beginSeq) {
         offsetContext.setChangePosition(
                 TxLogPosition.cloneAndSet(
                         offsetContext.getChangePosition(),
@@ -454,8 +446,8 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
                         Lsn.of(beginSeq)));
     }
 
-    private void handleOperation(InformixPartition partition, InformixOffsetContext offsetContext, Operation operation,
-                                 Map<String, IfmxReadableType> before, Map<String, IfmxReadableType> after, TableId tableId)
+    private void handleOperation(InformixPartition partition, InformixOffsetContext offsetContext, TableId tableId,
+                                 Operation operation, Map<String, IfmxReadableType> before, Map<String, IfmxReadableType> after)
             throws InterruptedException {
         offsetContext.event(tableId, clock.currentTime());
 

@@ -1329,6 +1329,7 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
     public void testHeartbeatExecuted() throws Exception {
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.NO_DATA)
+                .with(InformixConnectorConfig.CDC_TIMEOUT, 0)
                 .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, "testdb.informix.tablea")
                 // A low heartbeat interval should make sure that a heartbeat message is emitted at least once during the test.
                 .with(Heartbeat.HEARTBEAT_INTERVAL, "100")
@@ -1355,6 +1356,7 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
     public void testHeartbeatActionQueryExecuted() throws Exception {
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.NO_DATA)
+                .with(InformixConnectorConfig.CDC_TIMEOUT, 0)
                 .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, "testdb.informix.tablea,testdb.informix.test_heartbeat_table")
                 // A low heartbeat interval should make sure that a heartbeat message is emitted at least once during the test.
                 .with(Heartbeat.HEARTBEAT_INTERVAL, "100")
