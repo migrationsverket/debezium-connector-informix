@@ -290,7 +290,7 @@
                             <run>
                                 <env>
                                     <LICENSE>accept</LICENSE>
-                                    <SIZE>small</SIZE>
+                                    <SIZE>large</SIZE>
                                     <TYPE>oltp</TYPE>
                                     <USEOSTIME>1</USEOSTIME>
                                     <DB_SBSPACE>1</DB_SBSPACE>
@@ -307,6 +307,7 @@
                                     <enabled>true</enabled>
                                     <color>yellow</color>
                                 </log>
+                                <memory>4294967296</memory>
                                 <wait>
                                     <log>${informix.run.wait.log}</log>
                                     <time>${informix.init.timeout}</time>
