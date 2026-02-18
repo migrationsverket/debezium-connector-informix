@@ -8,8 +8,7 @@ package io.debezium.connector.informix;
 import java.sql.SQLException;
 import java.util.List;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 
 import io.debezium.config.Configuration;
@@ -27,6 +26,7 @@ import io.debezium.util.Testing;
  * @author Chris Cranford
  */
 @ExtendWith(ConditionalFailExtension.class)
+@TestMethodOrder(MethodOrderer.Random.class)
 public class InformixChunkedSnapshotIT extends AbstractChunkedSnapshotTest<InformixConnector> {
 
     private InformixConnection connection;
@@ -44,6 +44,8 @@ public class InformixChunkedSnapshotIT extends AbstractChunkedSnapshotTest<Infor
 
     @AfterEach
     public void afterEach() throws Exception {
+        super.afterEach();
+
         stopConnector();
         waitForConnectorShutdown(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
         assertConnectorNotRunning();
@@ -53,7 +55,6 @@ public class InformixChunkedSnapshotIT extends AbstractChunkedSnapshotTest<Infor
             TestHelper.dropTables(connection, "dbz1220a", "dbz1220b", "dbz1220c", "dbz1220d", "dbz1220");
             connection.close();
         }
-        super.afterEach();
     }
 
     @Override
@@ -103,6 +104,7 @@ public class InformixChunkedSnapshotIT extends AbstractChunkedSnapshotTest<Infor
     @Override
     protected void waitForSnapshotToBeCompleted() throws InterruptedException {
         waitForSnapshotToBeCompleted(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
+        waitForAvailableRecords();
     }
 
     @Override
@@ -154,6 +156,16 @@ public class InformixChunkedSnapshotIT extends AbstractChunkedSnapshotTest<Infor
     @Override
     protected String getFullyQualifiedTableName(String tableName) {
         return "testdb.informix.%s".formatted(tableName);
+    }
+
+    @Override
+    protected String connector() {
+        return TestHelper.TEST_CONNECTOR;
+    }
+
+    @Override
+    protected String server() {
+        return TestHelper.TEST_DATABASE;
     }
 
 }
