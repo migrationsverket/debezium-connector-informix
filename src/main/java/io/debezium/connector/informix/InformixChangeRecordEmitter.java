@@ -10,7 +10,7 @@ import java.util.concurrent.Callable;
 
 import org.apache.kafka.connect.data.Field;
 
-import com.informix.jdbc.IfmxReadableType;
+import com.informix.jdbc.types.ReadableType;
 
 import io.debezium.DebeziumException;
 import io.debezium.data.Envelope.Operation;
@@ -69,7 +69,7 @@ public class InformixChangeRecordEmitter extends RelationalChangeRecordEmitter<I
      * @param data the data from informix cdc map[String,IfmxReadableType].
      * @author Laoflch Luo, Xiaolin Zhang
      */
-    public static Object[] convertIfxData2Array(Map<String, IfmxReadableType> data, TableSchema tableSchema) {
+    public static Object[] convertIfxData2Array(Map<String, ReadableType> data, TableSchema tableSchema) {
         return data == null ? new Object[0]
                 : tableSchema.valueSchema().fields().stream()
                         .map(Field::name)

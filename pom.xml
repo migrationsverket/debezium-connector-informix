@@ -159,16 +159,11 @@
             <groupId>io.debezium</groupId>
             <artifactId>debezium-storage-file</artifactId>
         </dependency>
-        <!-- Informix ChangeStream client -->
-        <dependency>
-            <groupId>com.ibm.informix</groupId>
-            <artifactId>ifx-changestream-client</artifactId>
-            <scope>provided</scope>
-        </dependency>
         <!-- Informix JDBC driver -->
         <dependency>
             <groupId>com.ibm.informix</groupId>
             <artifactId>jdbc</artifactId>
+            <version>15.0.1.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
