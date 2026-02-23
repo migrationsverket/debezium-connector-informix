@@ -317,6 +317,12 @@
                                 <from>${informix.image.registry}/${informix.image}:${informix.image.tag}</from>
                                 <runCmds>
                                     <run>sed -Ei 's/^(USEOSTIME)\s+\S/\1 1/' /opt/ibm/informix/etc/onconfig.std</run>
+                                    <run>sed -Ei 's/^(LOGBUFF)\s+\S+/\1 1024/' /opt/ibm/scripts/informix_config.large</run>
+                                    <run>sed -Ei 's/^(PHYSBUFF)\s+\S+/\1 4096/' /opt/ibm/scripts/informix_config.large</run>
+                                    <run>sed -Ei 's/^(LOGFILES)\s+\S+/\1 20/' /opt/ibm/scripts/informix_config.large</run>
+                                    <run>sed -Ei 's/^(LOGSIZE)\s+\S+/\1 64000/' /opt/ibm/informix/etc/onconfig.std</run>
+                                    <run>sed -Ei 's/^(PHYSFILE)\s+\S+/\1 768000/' /opt/ibm/informix/etc/onconfig.std</run>
+                                    <run>sed -Ei 's/^(ROOTSIZE)\s+\S+/\1 2097000/' /opt/ibm/scripts/informix_config.large</run>
                                 </runCmds>
                                 <assembly>
                                     <inline>
@@ -521,7 +527,6 @@
                 <informix.version>12</informix.version>
                 <informix.image>ibmcom-informix-developer-database</informix.image>
                 <informix.image.tag>12.10.FC12W1DE</informix.image.tag>
-                <informix.run.wait.log>Logical Log \d Complete</informix.run.wait.log>
                 <informix.image.registry>quay.io/debezium</informix.image.registry>
                 <informix.init.script.name>informix_init.sh</informix.init.script.name>
                 <informix.output.directory>scripts</informix.output.directory>

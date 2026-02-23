@@ -481,7 +481,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         final int ID_RESTART = 100;
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
-                .with(InformixConnectorConfig.CDC_BUFFERSIZE, 0x800)
                 .build();
 
         for (int i = 0; i < RECORDS_PER_TABLE; i++) {
@@ -793,7 +792,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         final int HALF_ID = ID_START + RECORDS_PER_TABLE / 2;
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
-                .with(InformixConnectorConfig.CDC_BUFFERSIZE, 0x800)
                 .build();
 
         if (restartJustAfterSnapshot) {
