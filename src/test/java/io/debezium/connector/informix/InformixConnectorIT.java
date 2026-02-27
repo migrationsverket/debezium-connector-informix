@@ -16,7 +16,6 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
@@ -482,7 +481,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         final int ID_RESTART = 100;
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
-                .with(InformixConnectorConfig.CDC_BUFFERSIZE, 0x800)
                 .build();
 
         for (int i = 0; i < RECORDS_PER_TABLE; i++) {
@@ -794,7 +792,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         final int HALF_ID = ID_START + RECORDS_PER_TABLE / 2;
         final Configuration config = TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
-                .with(InformixConnectorConfig.CDC_BUFFERSIZE, 0x800)
                 .build();
 
         if (restartJustAfterSnapshot) {
@@ -1276,10 +1273,6 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         List<SourceRecord> s1recs = actualRecords.recordsForTopic("testdb.informix.tablea");
         List<SourceRecord> s2recs = actualRecords.recordsForTopic("testdb.informix.tableb");
 
-        if (s2recs != null) { // Sometimes the record is processed by the stream so filtering it out
-            s2recs = s2recs.stream().filter(r -> "r".equals(((Struct) r.value()).get("op")))
-                    .collect(Collectors.toList());
-        }
         assertThat(s1recs.size()).isEqualTo(1);
         assertThat(s2recs).isNull();
 
