@@ -104,7 +104,6 @@ jobs:
       # Runs each combination concurrently
       matrix:
         profile:
-          - 'assembly,informix12'
           - 'assembly,informix14'
           - 'assembly,informix15'
       fail-fast: false
