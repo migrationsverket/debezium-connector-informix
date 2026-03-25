@@ -27,6 +27,7 @@ public class InformixChangeEventSourceFactory implements ChangeEventSourceFactor
     private final InformixConnectorConfig configuration;
     private final MainConnectionProvidingConnectionFactory<InformixConnection> connectionFactory;
     private final MainConnectionProvidingConnectionFactory<InformixConnection> cdcConnectionFactory;
+    private final MainConnectionProvidingConnectionFactory<InformixConnection> snapshotConnectionFactory;
     private final ErrorHandler errorHandler;
     private final EventDispatcher<InformixPartition, TableId> dispatcher;
     private final Clock clock;
@@ -36,11 +37,13 @@ public class InformixChangeEventSourceFactory implements ChangeEventSourceFactor
     public InformixChangeEventSourceFactory(InformixConnectorConfig configuration,
                                             MainConnectionProvidingConnectionFactory<InformixConnection> connectionFactory,
                                             MainConnectionProvidingConnectionFactory<InformixConnection> cdcConnectionFactory,
+                                            MainConnectionProvidingConnectionFactory<InformixConnection> snapshotConnectionFactory,
                                             ErrorHandler errorHandler, EventDispatcher<InformixPartition, TableId> dispatcher,
                                             Clock clock, InformixDatabaseSchema schema, SnapshotterService snapshotterService) {
         this.configuration = configuration;
         this.connectionFactory = connectionFactory;
         this.cdcConnectionFactory = cdcConnectionFactory;
+        this.snapshotConnectionFactory = snapshotConnectionFactory;
         this.errorHandler = errorHandler;
         this.dispatcher = dispatcher;
         this.clock = clock;
@@ -79,28 +82,16 @@ public class InformixChangeEventSourceFactory implements ChangeEventSourceFactor
                                                                                                                                                  SnapshotProgressListener<InformixPartition> snapshotProgressListener,
                                                                                                                                                  DataChangeEventListener<InformixPartition> dataChangeEventListener,
                                                                                                                                                  NotificationService<InformixPartition, InformixOffsetContext> notificationService) {
-
-        // If no signal data collection is configured, incremental snapshots are not supported
-        if (configuration.getSignalingDataCollectionId() == null) {
-            return Optional.empty();
-        }
-
-        // Create secondary database connection if configured
-        InformixConnection snapshotConnection = createSnapshotConnection();
-
-        return Optional.of(new InformixSignalBasedIncrementalSnapshotChangeEventSource(
-                configuration,
-                connectionFactory.mainConnection(), // Primary connection for signals/status
-                snapshotConnection, // Snapshot connection for data reads (may be same as primary)
-                dispatcher, schema, clock,
-                snapshotProgressListener,
-                dataChangeEventListener,
-                notificationService));
-    }
-
-    private InformixConnection createSnapshotConnection() {
-        return configuration.getSnapshotDatabaseConfig()
-                .map(InformixConnection::new)
-                .orElse(connectionFactory.mainConnection());
+        // If no data collection id is provided, don't return an instance as the implementation requires
+        // that a signal data collection id be provided to work.
+        return configuration.getSignalingDataCollectionIds().stream().findAny()
+                .map(s -> new InformixSignalBasedIncrementalSnapshotChangeEventSource(
+                        configuration,
+                        connectionFactory.mainConnection(), // Primary connection for signals/status
+                        snapshotConnectionFactory.mainConnection(), // Snapshot connection for data reads (may be same as primary)
+                        dispatcher, schema, clock,
+                        snapshotProgressListener,
+                        dataChangeEventListener,
+                        notificationService));
     }
 }

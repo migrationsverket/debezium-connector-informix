@@ -109,7 +109,7 @@ public class InformixSignalBasedIncrementalSnapshotChangeEventSource
     }
 
     @Override
-    protected Table readSchemaForTable(TableId tableId) throws SQLException {
+    protected Table readSchemaForTable(TableId tableId) {
         LOGGER.debug("Reading schema for table '{}' from snapshot database", tableId);
 
         Tables tempTables = new Tables();
