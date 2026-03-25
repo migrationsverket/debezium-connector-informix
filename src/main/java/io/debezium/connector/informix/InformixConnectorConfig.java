@@ -536,6 +536,19 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
         return this.snapshotIsolationMode;
     }
 
+    public Optional<JdbcConfiguration> getSnapshotJdbcConfig() {
+        Configuration config = getConfig();
+        return Optional.ofNullable(config.getString(INCREMENTAL_SNAPSHOT_DATABASE_HOSTNAME))
+                .map(h -> h.isBlank() ? null : h)
+                .map(hostname -> JdbcConfiguration.adapt(getJdbcConfig().edit()
+                        .with(JdbcConfiguration.HOSTNAME, hostname)
+                        .with(JdbcConfiguration.PORT, config.getInteger(INCREMENTAL_SNAPSHOT_DATABASE_PORT, config.getInteger(PORT)))
+                        .with(JdbcConfiguration.DATABASE, config.getString(INCREMENTAL_SNAPSHOT_DATABASE_NAME, config.getString(DATABASE_NAME)))
+                        .with(JdbcConfiguration.USER, config.getString(INCREMENTAL_SNAPSHOT_DATABASE_USER, config.getString(USER)))
+                        .with(JdbcConfiguration.PASSWORD, config.getString(INCREMENTAL_SNAPSHOT_DATABASE_PASSWORD, config.getString(PASSWORD)))
+                        .build()));
+    }
+
     public JdbcConfiguration getCdcJdbcConfig() {
         return cdcJdbcConfig;
     }
@@ -583,8 +596,7 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
 
     @Override
     public boolean isSignalDataCollection(DataCollectionId dataCollectionId) {
-        return getSignalingDataCollectionTableIds().stream()
-                .anyMatch(id -> id.equals(dataCollectionId));
+        return getSignalingDataCollectionTableIds().stream().anyMatch(id -> id.equals(dataCollectionId));
     }
 
     @Override
@@ -598,26 +610,5 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
         public boolean isIncluded(TableId t) {
             return !(t.table().toLowerCase().startsWith("sys"));
         }
-    }
-
-    public Optional<JdbcConfiguration> getSnapshotDatabaseConfig() {
-        String snapshotHostname = getConfig().getString(INCREMENTAL_SNAPSHOT_DATABASE_HOSTNAME);
-
-        if (snapshotHostname == null || snapshotHostname.trim().isEmpty()) {
-            return Optional.empty();
-        }
-
-        return Optional.of(JdbcConfiguration.adapt(
-                getConfig().edit()
-                        .with(JdbcConfiguration.HOSTNAME, snapshotHostname)
-                        .with(JdbcConfiguration.PORT,
-                                getConfig().getInteger(INCREMENTAL_SNAPSHOT_DATABASE_PORT, DEFAULT_PORT))
-                        .with(JdbcConfiguration.USER,
-                                getConfig().getString(INCREMENTAL_SNAPSHOT_DATABASE_USER, getConfig().getString(USER)))
-                        .with(JdbcConfiguration.PASSWORD,
-                                getConfig().getString(INCREMENTAL_SNAPSHOT_DATABASE_PASSWORD, getConfig().getString(PASSWORD)))
-                        .with(JdbcConfiguration.DATABASE,
-                                getConfig().getString(INCREMENTAL_SNAPSHOT_DATABASE_NAME, getConfig().getString(DATABASE_NAME)))
-                        .build()));
     }
 }

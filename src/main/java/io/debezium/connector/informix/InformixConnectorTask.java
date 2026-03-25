@@ -83,6 +83,7 @@ public class InformixConnectorTask extends BaseSourceTask<InformixPartition, Inf
     @Override
     protected ChangeEventSourceCoordinator<InformixPartition, InformixOffsetContext> start(Configuration config) {
 
+        @SuppressWarnings("unchecked")
         final TopicNamingStrategy<TableId> topicNamingStrategy = connectorConfig.getTopicNamingStrategy(CommonConnectorConfig.TOPIC_NAMING_STRATEGY);
         final SchemaNameAdjuster schemaNameAdjuster = connectorConfig.schemaNameAdjuster();
 
@@ -90,6 +91,11 @@ public class InformixConnectorTask extends BaseSourceTask<InformixPartition, Inf
                 () -> new InformixConnection(connectorConfig.getJdbcConfig()));
         MainConnectionProvidingConnectionFactory<InformixConnection> cdcConnectionFactory = new DefaultMainConnectionProvidingConnectionFactory<>(
                 () -> new InformixConnection(connectorConfig.getCdcJdbcConfig()));
+        MainConnectionProvidingConnectionFactory<InformixConnection> snapshotConnectionFactory = connectorConfig.getSnapshotJdbcConfig()
+                .<MainConnectionProvidingConnectionFactory<InformixConnection>> map(
+                        conf -> new DefaultMainConnectionProvidingConnectionFactory<>(
+                                () -> new InformixConnection(conf)))
+                .orElse(connectionFactory);
         dataConnection = connectionFactory.mainConnection();
         cdcConnection = cdcConnectionFactory.mainConnection();
 
@@ -115,9 +121,6 @@ public class InformixConnectorTask extends BaseSourceTask<InformixPartition, Inf
         connectorConfig.getBeanRegistry().add(StandardBeanNames.VALUE_CONVERTER, valueConverters);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.OFFSETS, previousOffsets);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, taskContext);
-
-        final InformixPartition partition = previousOffsets.getTheOnlyPartition();
-        final InformixOffsetContext previousOffset = previousOffsets.getTheOnlyOffset();
 
         final SnapshotterService snapshotterService = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
 
@@ -165,9 +168,7 @@ public class InformixConnectorTask extends BaseSourceTask<InformixPartition, Inf
                         connectorConfig,
                         metadataProvider,
                         schemaNameAdjuster,
-                        (record) -> {
-                            queue.enqueue(new DataChangeEvent(record));
-                        },
+                        (SourceRecord record) -> queue.enqueue(new DataChangeEvent(record)),
                         topicNamingStrategy.transactionTopic()),
                 signalProcessor,
                 connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class));
@@ -183,8 +184,8 @@ public class InformixConnectorTask extends BaseSourceTask<InformixPartition, Inf
                 errorHandler,
                 InformixConnector.class,
                 connectorConfig,
-                new InformixChangeEventSourceFactory(connectorConfig, connectionFactory, cdcConnectionFactory, errorHandler, dispatcher, clock, schema,
-                        snapshotterService),
+                new InformixChangeEventSourceFactory(connectorConfig, connectionFactory, cdcConnectionFactory, snapshotConnectionFactory,
+                        errorHandler, dispatcher, clock, schema, snapshotterService),
                 new DefaultChangeEventSourceMetricsFactory<>(),
                 dispatcher, schema,
                 signalProcessor,
