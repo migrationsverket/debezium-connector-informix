@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 
 import com.informix.jdbc.IfxDriver;
 import com.informix.jdbcx.IfxDataSource;
+import com.informix.lang.IfxTypes;
 
 import io.debezium.DebeziumException;
 import io.debezium.config.CommonConnectorConfig;
@@ -133,16 +134,13 @@ public class InformixConnection extends JdbcConnection {
     }
 
     @Override
+    protected int resolveNativeType(String typeName) {
+        return IfxTypes.FromIfxNameToIfxType(typeName);
+    }
+
+    @Override
     public String buildSelectPrimaryKeyBoundaries(TableId tableId, long size, String projection, String orderBy) {
-        return new StringBuilder("SELECT ")
-                .append("SKIP ").append(size)
-                .append(" FIRST 1 ")
-                .append(projection)
-                .append(" FROM ")
-                .append(quotedTableIdString(tableId))
-                .append(" ORDER BY ")
-                .append(orderBy)
-                .toString();
+        return "SELECT SKIP %d FIRST 1 %s FROM %s ORDER BY %s".formatted(size, projection, quotedTableIdString(tableId), orderBy);
     }
 
     @Override

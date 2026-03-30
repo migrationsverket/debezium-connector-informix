@@ -8,7 +8,6 @@ package io.debezium.connector.informix;
 import java.util.Map;
 import java.util.concurrent.Callable;
 
-import com.informix.jdbc.IfxUDT;
 import com.informix.jdbc.types.ReadableType;
 import com.informix.jdbc.udt.BasicUdt;
 
@@ -33,7 +32,6 @@ public class InformixChangeRecordEmitter extends RelationalChangeRecordEmitter<I
     private final Operation operation;
     private final Map<String, ReadableType> before;
     private final Map<String, ReadableType> after;
-    private final IfxUDT placeholderValue;
 
     public InformixChangeRecordEmitter(InformixPartition partition, InformixOffsetContext offsetContext, Clock clock,
                                        InformixConnectorConfig connectorConfig, InformixDatabaseSchema schema, TableId tableId,
@@ -45,7 +43,6 @@ public class InformixChangeRecordEmitter extends RelationalChangeRecordEmitter<I
         this.operation = operation;
         this.before = before;
         this.after = after;
-        this.placeholderValue = new BasicUdt(connectorConfig.getUnavailableValuePlaceholder());
     }
 
     @Override
@@ -74,7 +71,7 @@ public class InformixChangeRecordEmitter extends RelationalChangeRecordEmitter<I
         // based on the schema columns, create the values on the same position as the columns
         return data == null ? new Object[table.columns().size()]
                 : table.retrieveColumnNames().stream()
-                        .map(key -> data.getOrDefault(key, placeholderValue))
+                        .map(colName -> data.getOrDefault(colName, new BasicUdt()))
                         .map(type -> propagate(type::toObject)).toArray();
     }
 

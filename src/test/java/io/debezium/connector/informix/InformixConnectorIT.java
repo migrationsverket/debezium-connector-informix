@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -80,7 +81,7 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                 "CREATE TABLE masked_hashed_column_table (id int not null, name varchar(255), name2 varchar(255), name3 varchar(20), primary key (id))",
                 "CREATE TABLE truncated_column_table (id int not null, name varchar(20), primary key (id))",
                 "CREATE TABLE truncate_table (id int not null, name varchar(20), primary key (id))",
-                "CREATE TABLE dt_table (id int not null, c1 int, c2 int, c3a numeric(5,2), c3b varchar(128), f1 float(14), f2 decimal(8,4), primary key(id))",
+                "CREATE TABLE dt_table (id int not null, c1 int, c2 int, c3a numeric(5,2), c3b varchar(128), f1 float(14), f2 decimal(8,4), t1 text, b1 byte, primary key(id))",
                 "CREATE TABLE always_snapshot (id int not null, data varchar(50) not null, primary key(id))",
                 "CREATE TABLE test_heartbeat_table (text varchar(255))",
                 "INSERT INTO tablea VALUES(1, 'a')");
@@ -667,16 +668,18 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, snapshotMode)
                 .with(InformixConnectorConfig.STORE_ONLY_CAPTURED_TABLES_DDL, true)
                 .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, "testdb.informix.dt_table")
-                .with(InformixConnectorConfig.COLUMN_INCLUDE_LIST, "informix.dt_table.id,informix.dt_table.c1,informix.dt_table.c3a,informix.dt_table.f1")
+                .with(InformixConnectorConfig.COLUMN_INCLUDE_LIST,
+                        "informix.dt_table.id,informix.dt_table.c1,informix.dt_table.c3a,,informix.dt_table.f1,informix.dt_table.t1")
                 .build();
 
-        final int expectedRecords;
+        int expectedRecords = 1;
         if (snapshotMode == SnapshotMode.INITIAL) {
             expectedRecords = 2;
-            connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (0,123,456,789.01,'test',1.228,2.3456)");
-        }
-        else {
-            expectedRecords = 1;
+            connection.prepareUpdate("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2,t1,b1) values (0,123,456,789.01,'test',1.228,2.3456,?,?)",
+                    ps -> {
+                        ps.setString(1, "text");
+                        ps.setBytes(2, "bytes".getBytes());
+                    }).commit();
         }
 
         start(InformixConnector.class, config);
@@ -689,7 +692,11 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
         waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS);
 
-        connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (1,123,456,789.01,'test',1.228,2.3456)");
+        connection.prepareUpdate("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2,t1,b1) values (1,123,456,789.01,'test',1.228,2.3456,?,?)",
+                ps -> {
+                    ps.setString(1, "text");
+                    ps.setBytes(2, "bytes".getBytes());
+                }).commit();
 
         waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS);
 
@@ -702,18 +709,21 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                 .field("c1", Schema.OPTIONAL_INT32_SCHEMA)
                 .field("c3a", SpecialValueDecimal.builder(DecimalMode.PRECISE, 5, 2).optional().build())
                 .field("f1", Schema.OPTIONAL_FLOAT64_SCHEMA)
+                .field("t1", Schema.OPTIONAL_STRING_SCHEMA)
                 .build();
         Struct aStruct = new Struct(aSchema)
+                .put("id", 0)
                 .put("c1", 123)
                 .put("c3a", BigDecimal.valueOf(789.01))
-                .put("f1", 1.228);
+                .put("f1", 1.228)
+                .put("t1", "text");
+        int r = 0;
         if (snapshotMode == SnapshotMode.INITIAL) {
-            SourceRecordAssert.assertThat(table.get(0)).valueAfterFieldIsEqualTo(aStruct.put("id", 0));
-            SourceRecordAssert.assertThat(table.get(1)).valueAfterFieldIsEqualTo(aStruct.put("id", 1));
+            SourceRecordAssert.assertThat(table.get(r++)).valueAfterFieldIsEqualTo(aStruct);
         }
-        else {
-            SourceRecordAssert.assertThat(table.get(0)).valueAfterFieldIsEqualTo(aStruct.put("id", 1));
-        }
+        aStruct.put("id", 1)
+                .put("t1", "__debezium_unavailable_value");
+        SourceRecordAssert.assertThat(table.get(r)).valueAfterFieldIsEqualTo(aStruct);
 
         assertNoRecordsToConsume();
     }
@@ -735,16 +745,17 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, snapshotMode)
                 .with(InformixConnectorConfig.STORE_ONLY_CAPTURED_TABLES_DDL, true)
                 .with(InformixConnectorConfig.TABLE_EXCLUDE_LIST, "testdb.informix.tablea")
-                .with(InformixConnectorConfig.COLUMN_EXCLUDE_LIST, "informix.dt_table.c1,informix.dt_table.c3a,informix.dt_table.f1")
+                .with(InformixConnectorConfig.COLUMN_EXCLUDE_LIST, "informix.dt_table.c1,informix.dt_table.c3a,informix.dt_table.f1,informix.dt_table.t1")
                 .build();
 
-        final int expectedRecords;
+        int expectedRecords = 1;
         if (snapshotMode == SnapshotMode.INITIAL) {
             expectedRecords = 2;
-            connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (0,123,456,789.01,'test',1.228,2.3456)");
-        }
-        else {
-            expectedRecords = 1;
+            connection.prepareUpdate("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2,t1,b1) values (0,123,456,789.01,'test',1.228,2.3456,?,?)",
+                    ps -> {
+                        ps.setString(1, "text");
+                        ps.setBytes(2, "bytes".getBytes());
+                    }).commit();
         }
 
         start(InformixConnector.class, config);
@@ -757,7 +768,11 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
         waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS);
 
-        connection.execute("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2) values (1,123,456,789.01,'test',1.228,2.3456)");
+        connection.prepareUpdate("INSERT INTO dt_table (id,c1,c2,c3a,c3b,f1,f2,t1,b1) values (1,123,456,789.01,'test',1.228,2.3456,?,?)",
+                ps -> {
+                    ps.setString(1, "text");
+                    ps.setBytes(2, "bytes".getBytes());
+                }).commit();
 
         waitForAvailableRecords(waitTimeForRecords() * 5L, TimeUnit.SECONDS);
 
@@ -770,18 +785,21 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                 .field("c2", Schema.OPTIONAL_INT32_SCHEMA)
                 .field("c3b", Schema.OPTIONAL_STRING_SCHEMA)
                 .field("f2", SpecialValueDecimal.builder(DecimalMode.PRECISE, 8, 4).optional().build())
+                .field("b1", Schema.OPTIONAL_BYTES_SCHEMA)
                 .build();
         Struct aStruct = new Struct(aSchema)
+                .put("id", 0)
                 .put("c2", 456)
                 .put("c3b", "test")
-                .put("f2", BigDecimal.valueOf(2.3456));
+                .put("f2", BigDecimal.valueOf(2.3456))
+                .put("b1", ByteBuffer.wrap("bytes".getBytes()));
+        int r = 0;
         if (snapshotMode == SnapshotMode.INITIAL) {
-            SourceRecordAssert.assertThat(table.get(0)).valueAfterFieldIsEqualTo(aStruct.put("id", 0));
-            SourceRecordAssert.assertThat(table.get(1)).valueAfterFieldIsEqualTo(aStruct.put("id", 1));
+            SourceRecordAssert.assertThat(table.get(r++)).valueAfterFieldIsEqualTo(aStruct);
         }
-        else {
-            SourceRecordAssert.assertThat(table.get(0)).valueAfterFieldIsEqualTo(aStruct.put("id", 1));
-        }
+        aStruct.put("id", 1)
+                .put("b1", ByteBuffer.wrap("__debezium_unavailable_value".getBytes()));
+        SourceRecordAssert.assertThat(table.get(r)).valueAfterFieldIsEqualTo(aStruct);
 
         assertNoRecordsToConsume();
     }
