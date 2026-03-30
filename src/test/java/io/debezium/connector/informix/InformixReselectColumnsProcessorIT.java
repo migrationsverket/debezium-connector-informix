@@ -5,12 +5,27 @@
  */
 package io.debezium.connector.informix;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.nio.ByteBuffer;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.util.List;
+
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.kafka.connect.data.Struct;
+import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import io.debezium.config.Configuration;
 import io.debezium.connector.informix.util.TestHelper;
+import io.debezium.data.Envelope;
+import io.debezium.data.VerifyRecord;
+import io.debezium.doc.FixFor;
 import io.debezium.jdbc.JdbcConnection;
+import io.debezium.junit.logging.LogInterceptor;
 import io.debezium.processors.AbstractReselectProcessorTest;
 import io.debezium.processors.reselect.ReselectColumnsPostProcessor;
 import io.debezium.util.Testing;
@@ -25,7 +40,6 @@ public class InformixReselectColumnsProcessorIT extends AbstractReselectProcesso
     @BeforeEach
     public void beforeEach() throws Exception {
         connection = TestHelper.testConnection();
-        connection.setAutoCommit(false);
 
         initializeConnectorTestFramework();
         Testing.Files.delete(TestHelper.SCHEMA_HISTORY_PATH);
@@ -39,11 +53,6 @@ public class InformixReselectColumnsProcessorIT extends AbstractReselectProcesso
         assertConnectorNotRunning();
 
         super.afterEach();
-        if (connection != null) {
-            connection.rollback()
-                    .execute("DROP TABLE dbz4321")
-                    .close();
-        }
     }
 
     @Override
@@ -70,7 +79,7 @@ public class InformixReselectColumnsProcessorIT extends AbstractReselectProcesso
 
     @Override
     protected String tableName() {
-        return "informix.dbz4321";
+        return "dbz4321";
     }
 
     @Override
@@ -80,12 +89,15 @@ public class InformixReselectColumnsProcessorIT extends AbstractReselectProcesso
 
     @Override
     protected void createTable() throws Exception {
-        connection.execute("DROP TABLE IF EXISTS DBZ4321");
-        connection.execute("CREATE TABLE DBZ4321 (id int not null, data varchar(50), data2 int, primary key(id))");
+        connection.execute("CREATE TABLE dbz4321 (id int not null, data varchar(50), data2 int, primary key(id));");
     }
 
     @Override
     protected void dropTable() throws Exception {
+        connection.execute(
+                "DROP TABLE IF EXISTS dbz4321",
+                "DROP TABLE IF EXISTS dbz4321_byte",
+                "DROP TABLE IF EXISTS dbz4321_text");
     }
 
     @Override
@@ -104,13 +116,108 @@ public class InformixReselectColumnsProcessorIT extends AbstractReselectProcesso
         waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
     }
 
+    @Override
     protected SourceRecords consumeRecordsByTopicReselectWhenNullStreaming() throws InterruptedException {
         waitForAvailableRecords();
         return super.consumeRecordsByTopicReselectWhenNullStreaming();
     }
 
+    @Override
     protected SourceRecords consumeRecordsByTopicReselectWhenNotNullStreaming() throws InterruptedException {
         waitForAvailableRecords();
         return super.consumeRecordsByTopicReselectWhenNotNullStreaming();
+    }
+
+    @Test
+    @FixFor("dbz#1766")
+    public void testColumnReselectedWhenTextValueIsUnavailable() throws Exception {
+        connection.execute("CREATE TABLE dbz4321_text (id int primary key, data text, data2 int);");
+
+        final LogInterceptor reselectLogInterceptor = getReselectLogInterceptor();
+
+        Configuration config = getConfigurationBuilder()
+                .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, "testdb.informix.dbz4321_text")
+                .build();
+
+        start(getConnectorClass(), config);
+        assertConnectorIsRunning();
+
+        waitForStreamingStarted();
+
+        final String text = RandomStringUtils.randomAlphabetic(10000);
+        final Clob clob = connection.connection().createClob();
+        clob.setString(1, text);
+
+        connection.prepareUpdate("INSERT INTO dbz4321_text (id, data, data2) values (1, ?, 1);",
+                ps -> ps.setClob(1, clob)).commit();
+        connection.execute("UPDATE dbz4321_text SET data2 = 2 where id = 1;");
+
+        final SourceRecords sourceRecords = consumeRecordsByTopic(2);
+        final List<SourceRecord> tableRecords = sourceRecords.recordsForTopic("testdb.informix.dbz4321_text");
+
+        // Check insert
+        SourceRecord record = tableRecords.get(0);
+        Struct after = ((Struct) record.value()).getStruct(Envelope.FieldName.AFTER);
+        VerifyRecord.isValidInsert(record, "id", 1);
+        assertThat(after.get("id")).isEqualTo(1);
+        assertThat(after.get("data")).isEqualTo(text);
+        assertThat(after.get("data2")).isEqualTo(1);
+
+        // Check update
+        record = tableRecords.get(1);
+        after = ((Struct) record.value()).getStruct(Envelope.FieldName.AFTER);
+        VerifyRecord.isValidUpdate(record, "id", 1);
+        assertThat(after.get("id")).isEqualTo(1);
+        assertThat(after.get("data")).isEqualTo(text);
+        assertThat(after.get("data2")).isEqualTo(2);
+
+        assertColumnReselectedForUnavailableValue(reselectLogInterceptor, "testdb.informix.dbz4321_text", "data");
+    }
+
+    @Test
+    @FixFor("dbz#1766")
+    public void testColumnReselectedWhenByteValueIsUnavailable() throws Exception {
+        connection.execute("CREATE TABLE dbz4321_byte (id int primary key, data byte, data2 int);");
+
+        final LogInterceptor reselectLogInterceptor = getReselectLogInterceptor();
+
+        Configuration config = getConfigurationBuilder()
+                .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, "testdb.informix.dbz4321_byte")
+                .build();
+
+        start(getConnectorClass(), config);
+        assertConnectorIsRunning();
+
+        waitForStreamingStarted();
+
+        final String text = RandomStringUtils.randomAlphabetic(10000);
+        final Blob blob = connection.connection().createBlob();
+        blob.setBytes(0, text.getBytes());
+        ByteBuffer wrapped = ByteBuffer.wrap(text.getBytes());
+
+        connection.prepareUpdate("INSERT INTO dbz4321_byte (id, data, data2) values (1, ?, 1);",
+                ps -> ps.setBlob(1, blob)).commit();
+        connection.execute("UPDATE dbz4321_byte SET data2 = 2 where id = 1;");
+
+        final SourceRecords sourceRecords = consumeRecordsByTopic(2);
+        final List<SourceRecord> tableRecords = sourceRecords.recordsForTopic("testdb.informix.dbz4321_byte");
+
+        // Check insert
+        SourceRecord record = tableRecords.get(0);
+        Struct after = ((Struct) record.value()).getStruct(Envelope.FieldName.AFTER);
+        VerifyRecord.isValidInsert(record, "id", 1);
+        assertThat(after.get("id")).isEqualTo(1);
+        assertThat(after.get("data")).isEqualTo(wrapped);
+        assertThat(after.get("data2")).isEqualTo(1);
+
+        // Check update
+        record = tableRecords.get(1);
+        after = ((Struct) record.value()).getStruct(Envelope.FieldName.AFTER);
+        VerifyRecord.isValidUpdate(record, "id", 1);
+        assertThat(after.get("id")).isEqualTo(1);
+        assertThat(after.get("data")).isEqualTo(wrapped);
+        assertThat(after.get("data2")).isEqualTo(2);
+
+        assertColumnReselectedForUnavailableValue(reselectLogInterceptor, "testdb.informix.dbz4321_byte", "data");
     }
 }

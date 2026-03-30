@@ -9,13 +9,20 @@ import static java.lang.Thread.currentThread;
 
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Multimap;
+import com.informix.jdbc.IfxUDT;
 import com.informix.jdbc.stream.api.StreamOperationRecord;
 import com.informix.jdbc.stream.api.StreamRecord;
 import com.informix.jdbc.stream.cdc.records.CDCBeginTransactionRecord;
@@ -24,11 +31,13 @@ import com.informix.jdbc.stream.cdc.records.CDCMetaDataRecord;
 import com.informix.jdbc.stream.cdc.records.CDCTruncateRecord;
 import com.informix.jdbc.stream.impl.StreamException;
 import com.informix.jdbc.types.ReadableType;
+import com.informix.lang.IfxTypes;
 
 import io.debezium.data.Envelope.Operation;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.source.spi.StreamingChangeEventSource;
+import io.debezium.relational.Column;
 import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaChangeEvent;
 import io.debezium.util.Clock;
@@ -47,6 +56,8 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
     private final ErrorHandler errorHandler;
     private final Clock clock;
     private final InformixDatabaseSchema schema;
+    private final byte[] unavailableValuePlaceholder;
+    private final Multimap<TableId, Column> reselectColumns = ArrayListMultimap.create();
     private InformixOffsetContext effectiveOffsetContext;
 
     public InformixStreamingChangeEventSource(InformixConnectorConfig connectorConfig,
@@ -60,6 +71,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         this.errorHandler = errorHandler;
         this.clock = clock;
         this.schema = schema;
+        this.unavailableValuePlaceholder = connectorConfig.getUnavailableValuePlaceholder();
     }
 
     @Override
@@ -225,11 +237,24 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
                 .returnEmptyTransactions(connectorConfig.returnEmptytransactions())
                 .context(context);
 
+        reselectColumns.clear();
+
         schema.tableIds().forEach((TableId tid) -> {
-            String[] colNames = schema.tableFor(tid).retrieveColumnNames().stream()
-                    .filter(colName -> schema.getColumnFilter().matches(tid.catalog(), tid.schema(), tid.table(), colName))
-                    .map(dataConnection::quoteIdentifier).toArray(String[]::new);
-            builder.watchTable(dataConnection.quotedTableIdString(tid), colNames);
+            Map<Boolean, List<Column>> columns = schema.tableFor(tid).columns().stream()
+                    .filter(column -> schema.getColumnFilter().matches(tid.catalog(), tid.schema(), tid.table(), column.name()))
+                    // Filter unsupported columns for reselection...
+                    .collect(Collectors.partitioningBy(
+                            column -> column.nativeType() == IfxTypes.IFX_TYPE_BYTE ||
+                                    column.nativeType() == IfxTypes.IFX_TYPE_TEXT ||
+                                    column.nativeType() == IfxTypes.IFX_TYPE_UDTVAR ||
+                                    column.nativeType() == IfxTypes.IFX_TYPE_UDTFIXED ||
+                                    column.nativeType() == IfxTypes.IFX_TYPE_UNKNOWN ||
+                                    IfxTypes.isComplexType(column.nativeType())));
+            reselectColumns.putAll(tid, columns.get(true));
+            builder.watchTable(dataConnection.quotedTableIdString(tid),
+                    columns.get(false).stream()
+                            .map(Column::name).map(dataConnection::quoteIdentifier)
+                            .toArray(String[]::new));
         });
 
         if (startLsn.isAvailable()) {
@@ -441,7 +466,75 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
             throws InterruptedException {
         offsetContext.event(tableId, clock.currentTime());
 
+        // add unavailable value placeholders for unsupported columns
+        if (reselectColumns.containsKey(tableId)) {
+            for (Column column : reselectColumns.get(tableId)) {
+                if (before != null) {
+                    before.put(column.name(), new UnavailableValuePlaceholderType(unavailableValuePlaceholder, column.jdbcType(), column.nativeType()));
+                }
+                if (after != null) {
+                    after.put(column.name(), new UnavailableValuePlaceholderType(unavailableValuePlaceholder, column.jdbcType(), column.nativeType()));
+                }
+            }
+        }
+
         dispatcher.dispatchDataChangeEvent(partition, tableId,
                 new InformixChangeRecordEmitter(partition, offsetContext, clock, connectorConfig, schema, tableId, operation, before, after));
+    }
+
+    static class UnavailableValuePlaceholderType extends IfxUDT {
+
+        protected final byte[] bytes;
+        protected final List<Byte> list;
+
+        UnavailableValuePlaceholderType(byte[] unavailableValuePlaceholder, int jdbcType, int ifxType) {
+            this.bytes = unavailableValuePlaceholder;
+            this.list = new ArrayList<>(bytes.length);
+            for (byte b : bytes) {
+                list.add(b);
+            }
+            this.jdbcType = jdbcType;
+            this.ifxType = ifxType;
+            this.isNull = bytes == null;
+        }
+
+        @Override
+        public byte[] toBytes() {
+            return bytes;
+        }
+
+        @Override
+        public String toString() {
+            return new String(bytes);
+        }
+
+        public Collection<?> toCollection() {
+            return Collections.unmodifiableCollection(list);
+        }
+
+        @Override
+        public Object toObject() {
+            switch (ifxType) {
+                case IfxTypes.IFX_TYPE_BYTE,
+                        IfxTypes.IFX_TYPE_UDTVAR,
+                        IfxTypes.IFX_TYPE_UDTFIXED,
+                        IfxTypes.IFX_TYPE_UNKNOWN -> {
+                    return toBytes();
+                }
+                case IfxTypes.IFX_TYPE_TEXT -> {
+                    return toString();
+                }
+                case IfxTypes.IFX_TYPE_SET,
+                        IfxTypes.IFX_TYPE_MULTISET,
+                        IfxTypes.IFX_TYPE_LIST,
+                        IfxTypes.IFX_TYPE_ROW,
+                        IfxTypes.IFX_TYPE_COLLECTION -> {
+                    return toCollection();
+                }
+                default -> {
+                    return null;
+                }
+            }
+        }
     }
 }
