@@ -12,7 +12,6 @@ import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.notification.NotificationService;
 import io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotChangeEventSource;
-import io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotChangeEventSource;
 import io.debezium.pipeline.source.spi.ChangeEventSourceFactory;
 import io.debezium.pipeline.source.spi.DataChangeEventListener;
 import io.debezium.pipeline.source.spi.SnapshotChangeEventSource;
@@ -28,6 +27,7 @@ public class InformixChangeEventSourceFactory implements ChangeEventSourceFactor
     private final InformixConnectorConfig configuration;
     private final MainConnectionProvidingConnectionFactory<InformixConnection> connectionFactory;
     private final MainConnectionProvidingConnectionFactory<InformixConnection> cdcConnectionFactory;
+    private final MainConnectionProvidingConnectionFactory<InformixConnection> snapshotConnectionFactory;
     private final ErrorHandler errorHandler;
     private final EventDispatcher<InformixPartition, TableId> dispatcher;
     private final Clock clock;
@@ -37,11 +37,13 @@ public class InformixChangeEventSourceFactory implements ChangeEventSourceFactor
     public InformixChangeEventSourceFactory(InformixConnectorConfig configuration,
                                             MainConnectionProvidingConnectionFactory<InformixConnection> connectionFactory,
                                             MainConnectionProvidingConnectionFactory<InformixConnection> cdcConnectionFactory,
+                                            MainConnectionProvidingConnectionFactory<InformixConnection> snapshotConnectionFactory,
                                             ErrorHandler errorHandler, EventDispatcher<InformixPartition, TableId> dispatcher,
                                             Clock clock, InformixDatabaseSchema schema, SnapshotterService snapshotterService) {
         this.configuration = configuration;
         this.connectionFactory = connectionFactory;
         this.cdcConnectionFactory = cdcConnectionFactory;
+        this.snapshotConnectionFactory = snapshotConnectionFactory;
         this.errorHandler = errorHandler;
         this.dispatcher = dispatcher;
         this.clock = clock;
@@ -80,18 +82,16 @@ public class InformixChangeEventSourceFactory implements ChangeEventSourceFactor
                                                                                                                                                  SnapshotProgressListener<InformixPartition> snapshotProgressListener,
                                                                                                                                                  DataChangeEventListener<InformixPartition> dataChangeEventListener,
                                                                                                                                                  NotificationService<InformixPartition, InformixOffsetContext> notificationService) {
-
         // If no data collection id is provided, don't return an instance as the implementation requires
         // that a signal data collection id be provided to work.
-        if (configuration.getSignalingDataCollectionIds().isEmpty()) {
-            return Optional.empty();
-        }
-        return Optional.of(new SignalBasedIncrementalSnapshotChangeEventSource<>(
-                configuration,
-                connectionFactory.mainConnection(),
-                dispatcher, schema, clock,
-                snapshotProgressListener,
-                dataChangeEventListener,
-                notificationService));
+        return configuration.getSignalingDataCollectionIds().stream().findAny()
+                .map(s -> new InformixSignalBasedIncrementalSnapshotChangeEventSource(
+                        configuration,
+                        connectionFactory.mainConnection(), // Primary connection for signals/status
+                        snapshotConnectionFactory.mainConnection(), // Snapshot connection for data reads (may be same as primary)
+                        dispatcher, schema, clock,
+                        snapshotProgressListener,
+                        dataChangeEventListener,
+                        notificationService));
     }
 }

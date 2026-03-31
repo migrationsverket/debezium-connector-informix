@@ -382,6 +382,49 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
             .withValidation(Field::isBoolean)
             .withDefault(DEFAULT_RETURN_EMPTY_TRANSACTIONS);
 
+    public static final Field INCREMENTAL_SNAPSHOT_DATABASE_HOSTNAME = Field.create("incremental.snapshot.database.hostname")
+            .withDisplayName("Snapshot Database Hostname")
+            .withType(ConfigDef.Type.STRING)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 4))
+            .withWidth(Width.MEDIUM)
+            .withImportance(Importance.LOW)
+            .withDescription("Hostname of the secondary database to use for incremental snapshot queries. " +
+                    "If not specified, snapshot queries will use the primary database. " +
+                    "The secondary database must be a synchronized replica of the primary database.");
+
+    public static final Field INCREMENTAL_SNAPSHOT_DATABASE_PORT = Field.create("incremental.snapshot.database.port")
+            .withDisplayName("Snapshot Database Port")
+            .withType(ConfigDef.Type.INT)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 5))
+            .withWidth(Width.SHORT)
+            .withImportance(Importance.LOW)
+            .withDefault(DEFAULT_PORT)
+            .withDescription("Port number of the secondary database for incremental snapshots.");
+
+    public static final Field INCREMENTAL_SNAPSHOT_DATABASE_USER = Field.create("incremental.snapshot.database.user")
+            .withDisplayName("Snapshot Database User")
+            .withType(ConfigDef.Type.STRING)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 6))
+            .withWidth(Width.MEDIUM)
+            .withImportance(Importance.LOW)
+            .withDescription("Database user for secondary database connection. If not specified, uses the primary database user.");
+
+    public static final Field INCREMENTAL_SNAPSHOT_DATABASE_PASSWORD = Field.create("incremental.snapshot.database.password")
+            .withDisplayName("Snapshot Database Password")
+            .withType(ConfigDef.Type.PASSWORD)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 7))
+            .withWidth(Width.MEDIUM)
+            .withImportance(Importance.LOW)
+            .withDescription("Database password for secondary database connection. If not specified, uses the primary database password.");
+
+    public static final Field INCREMENTAL_SNAPSHOT_DATABASE_NAME = Field.create("incremental.snapshot.database.dbname")
+            .withDisplayName("Snapshot Database Name")
+            .withType(ConfigDef.Type.STRING)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 8))
+            .withWidth(Width.MEDIUM)
+            .withImportance(Importance.LOW)
+            .withDescription("Database name for secondary database connection. If not specified, uses the primary database name.");
+
     public static final Field SOURCE_INFO_STRUCT_MAKER = CommonConnectorConfig.SOURCE_INFO_STRUCT_MAKER
             .withDefault(InformixSourceInfoStructMaker.class.getName());
 
@@ -408,6 +451,11 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
                     SCHEMA_NAME_ADJUSTMENT_MODE,
                     FIELD_NAME_ADJUSTMENT_MODE,
                     INCREMENTAL_SNAPSHOT_CHUNK_SIZE,
+                    INCREMENTAL_SNAPSHOT_DATABASE_HOSTNAME,
+                    INCREMENTAL_SNAPSHOT_DATABASE_PORT,
+                    INCREMENTAL_SNAPSHOT_DATABASE_USER,
+                    INCREMENTAL_SNAPSHOT_DATABASE_PASSWORD,
+                    INCREMENTAL_SNAPSHOT_DATABASE_NAME,
                     CDC_BUFFERSIZE,
                     CDC_TIMEOUT,
                     CDC_STOP_ON_CLOSE,
@@ -474,6 +522,19 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
         return this.snapshotIsolationMode;
     }
 
+    public Optional<JdbcConfiguration> getSnapshotJdbcConfig() {
+        Configuration config = getConfig();
+        return Optional.ofNullable(config.getString(INCREMENTAL_SNAPSHOT_DATABASE_HOSTNAME))
+                .map(h -> h.isBlank() ? null : h)
+                .map(hostname -> JdbcConfiguration.adapt(getJdbcConfig().edit()
+                        .with(JdbcConfiguration.HOSTNAME, hostname)
+                        .with(JdbcConfiguration.PORT, config.getInteger(INCREMENTAL_SNAPSHOT_DATABASE_PORT, config.getInteger(PORT)))
+                        .with(JdbcConfiguration.DATABASE, config.getString(INCREMENTAL_SNAPSHOT_DATABASE_NAME, config.getString(DATABASE_NAME)))
+                        .with(JdbcConfiguration.USER, config.getString(INCREMENTAL_SNAPSHOT_DATABASE_USER, config.getString(USER)))
+                        .with(JdbcConfiguration.PASSWORD, config.getString(INCREMENTAL_SNAPSHOT_DATABASE_PASSWORD, config.getString(PASSWORD)))
+                        .build()));
+    }
+
     public JdbcConfiguration getCdcJdbcConfig() {
         return cdcJdbcConfig;
     }
@@ -517,8 +578,7 @@ public class InformixConnectorConfig extends HistorizedRelationalDatabaseConnect
 
     @Override
     public boolean isSignalDataCollection(DataCollectionId dataCollectionId) {
-        return getSignalingDataCollectionTableIds().stream()
-                .anyMatch(id -> id.equals(dataCollectionId));
+        return getSignalingDataCollectionTableIds().stream().anyMatch(id -> id.equals(dataCollectionId));
     }
 
     @Override
