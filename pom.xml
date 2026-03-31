@@ -9,7 +9,7 @@
 
     <modelVersion>4.0.0</modelVersion>
     <artifactId>debezium-connector-informix</artifactId>
-    <version>3.5.0-SNAPSHOT</version>
+    <version>3.5.0.Final</version>
     <name>Debezium Connector for Informix Server</name>
     <packaging>jar</packaging>
 
@@ -17,7 +17,7 @@
         <connection>scm:git:git@github.com:debezium/debezium-connector-informix.git</connection>
         <developerConnection>scm:git:git@github.com:debezium/debezium-connector-informix.git</developerConnection>
         <url>https://github.com/debezium/debezium-connector-informix</url>
-        <tag>HEAD</tag>
+        <tag>v3.5.0.Final</tag>
     </scm>
 
     <properties>
@@ -39,8 +39,8 @@
         <informix.init.timeout>300000</informix.init.timeout> <!-- five minutes max -->
         <informix.run.wait.log>SCHAPI: Started \d dbWorker threads</informix.run.wait.log>
         <informix.size>medium</informix.size>
-        <informix.init.script.name/>
-        <informix.sch.init.script.name/>
+        <informix.init.script.name />
+        <informix.sch.init.script.name />
         <informix.pre.init.script.name>informix_pre_init.sh</informix.pre.init.script.name>
         <informix.post.init.script.name>informix_post_init.sh</informix.post.init.script.name>
         <!-- Default values for the database -->
@@ -585,8 +585,8 @@
                 <informix.size>custom</informix.size>
                 <informix.init.script.name>informix_init.sh</informix.init.script.name>
                 <informix.sch.init.script.name>sch_init_informix.custom.sql</informix.sch.init.script.name>
-                <informix.pre.init.script.name/>
-                <informix.post.init.script.name/>
+                <informix.pre.init.script.name />
+                <informix.post.init.script.name />
                 <informix.db.date>MDY2.</informix.db.date>
                 <informix.db.century>C</informix.db.century>
             </properties>
