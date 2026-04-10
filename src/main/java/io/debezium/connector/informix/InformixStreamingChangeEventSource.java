@@ -230,7 +230,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
     private InformixCdcTransactionEngine getTransactionEngine(ChangeEventSourceContext context, InformixDatabaseSchema schema, Lsn startLsn)
             throws SQLException {
         InformixCdcTransactionEngine.Builder builder = InformixCdcTransactionEngine
-                .builder(dataConnection.datasource())
+                .builder(dataConnection)
                 .buffer(connectorConfig.getCdcBuffersize())
                 .maxRecords(connectorConfig.getCdcMaxRecords())
                 .timeout(connectorConfig.getCdcTimeout())
