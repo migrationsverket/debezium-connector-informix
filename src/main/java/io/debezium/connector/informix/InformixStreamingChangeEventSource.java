@@ -33,6 +33,7 @@ import com.informix.jdbc.stream.impl.StreamException;
 import com.informix.jdbc.types.ReadableType;
 import com.informix.lang.IfxTypes;
 
+import io.debezium.connector.informix.stream.DbzTransactionEngine;
 import io.debezium.data.Envelope.Operation;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
@@ -120,7 +121,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         Lsn lastBeginLsn = lastPosition.getBeginLsn();
         Lsn beginLsn = lastBeginLsn.isAvailable() ? lastBeginLsn : lastCommitLsn;
 
-        try (InformixCdcTransactionEngine transactionEngine = getTransactionEngine(context, schema, beginLsn)) {
+        try (DbzTransactionEngine transactionEngine = getTransactionEngine(context, schema, beginLsn)) {
             transactionEngine.init();
 
             /*
@@ -227,9 +228,9 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         return effectiveOffsetContext;
     }
 
-    private InformixCdcTransactionEngine getTransactionEngine(ChangeEventSourceContext context, InformixDatabaseSchema schema, Lsn startLsn)
+    private DbzTransactionEngine getTransactionEngine(ChangeEventSourceContext context, InformixDatabaseSchema schema, Lsn startLsn)
             throws SQLException {
-        InformixCdcTransactionEngine.Builder builder = InformixCdcTransactionEngine
+        DbzTransactionEngine.Builder builder = DbzTransactionEngine
                 .builder(dataConnection)
                 .buffer(connectorConfig.getCdcBuffersize())
                 .maxRecords(connectorConfig.getCdcMaxRecords())
@@ -269,7 +270,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         return builder.build();
     }
 
-    private void handleTransaction(InformixCdcTransactionEngine engine, InformixPartition partition, InformixOffsetContext offsetContext,
+    private void handleTransaction(DbzTransactionEngine engine, InformixPartition partition, InformixOffsetContext offsetContext,
                                    InformixStreamTransactionRecord transactionRecord, boolean recover)
             throws InterruptedException, StreamException {
         long tStart = System.nanoTime();
@@ -429,7 +430,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         }
     }
 
-    private void handleMetadata(InformixPartition partition, InformixOffsetContext offsetContext, InformixCdcTransactionEngine engine, CDCMetaDataRecord metaDataRecord)
+    private void handleMetadata(InformixPartition partition, InformixOffsetContext offsetContext, DbzTransactionEngine engine, CDCMetaDataRecord metaDataRecord)
             throws InterruptedException {
         long start = System.nanoTime();
         TableId tableId = engine.getTableIdByLabelId().get(metaDataRecord.getLabel());
