@@ -11,6 +11,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,33 +66,16 @@ public class DbzCDCEngine implements StreamEngine {
     @Override
     public StreamRecord getRecord() throws SQLException, StreamException {
         if (bytesPending < 16) {
-            int bytesToRead = bufferSize - bytesPending;
-            byte[] tmpBuffer = new byte[bytesToRead];
-            int bytesRead = smartBlob.IfxLoRead(sessionId, tmpBuffer, bytesToRead);
-            if (bytesRead < 0) {
-                throw new StreamException("IfxLoRead returned -1, no more data?");
-            }
-            System.arraycopy(tmpBuffer, 0, buffer, bytesPending, bytesRead);
-            bytesPending += bytesRead;
+            readFromLob();
         }
         ByteBuffer byteBuffer = ByteBuffer.wrap(buffer, 0, bytesPending);
 
-        byteBuffer.mark();
-        int headerSize = byteBuffer.getInt();
-        int payloadSize = byteBuffer.getInt();
-        byteBuffer.reset();
+        StreamRecord record = buildRecord(byteBuffer);
 
-        int recordSize = headerSize + payloadSize;
-        if (byteBuffer.remaining() < recordSize) {
-            return null; // Throw exception?
+        if (record != null) {
+            bytesPending = byteBuffer.remaining();
+            System.arraycopy(buffer, byteBuffer.position(), buffer, 0, bytesPending);
         }
-
-        byte[] recordBytes = new byte[recordSize];
-        byteBuffer.get(recordBytes);
-        StreamRecord record = recordBuilder.buildRecord(recordBytes);
-
-        bytesPending = byteBuffer.remaining();
-        System.arraycopy(buffer, byteBuffer.position(), buffer, 0, bytesPending);
 
         return record;
     }
@@ -99,30 +83,14 @@ public class DbzCDCEngine implements StreamEngine {
     @Override
     public List<StreamRecord> getRecords() throws SQLException, StreamException {
         List<StreamRecord> records = new ArrayList<>();
-        int bytesToRead = bufferSize - bytesPending;
-        byte[] tmpBuffer = new byte[bytesToRead];
-        int bytesRead = smartBlob.IfxLoRead(sessionId, tmpBuffer, bytesToRead);
-        if (bytesRead < 0) {
-            throw new StreamException("IfxLoRead returned -1, no more data?");
-        }
-
-        System.arraycopy(tmpBuffer, 0, buffer, bytesPending, bytesRead);
-        ByteBuffer byteBuffer = ByteBuffer.wrap(buffer, 0, bytesPending + bytesRead);
+        readFromLob();
+        ByteBuffer byteBuffer = ByteBuffer.wrap(buffer, 0, bytesPending);
 
         while (byteBuffer.remaining() >= 16) {
-            byteBuffer.mark();
-            int headerSize = byteBuffer.getInt();
-            int payloadSize = byteBuffer.getInt();
-            byteBuffer.reset();
-
-            int recordSize = headerSize + payloadSize;
-            if (byteBuffer.remaining() < recordSize) {
+            StreamRecord record = buildRecord(byteBuffer);
+            if (record == null) {
                 break;
             }
-
-            byte[] recordBytes = new byte[recordSize];
-            byteBuffer.get(recordBytes);
-            StreamRecord record = recordBuilder.buildRecord(recordBytes);
             records.add(record);
         }
 
@@ -130,6 +98,33 @@ public class DbzCDCEngine implements StreamEngine {
         System.arraycopy(buffer, byteBuffer.position(), buffer, 0, bytesPending);
 
         return records;
+    }
+
+    protected void readFromLob() throws SQLException, StreamException {
+        int bytesToRead = bufferSize - bytesPending;
+        byte[] tmpBuffer = new byte[bytesToRead];
+        int bytesRead = smartBlob.IfxLoRead(sessionId, tmpBuffer, bytesToRead);
+        if (bytesRead < 0) {
+            throw new StreamException("IfxLoRead returned -1, no more data?");
+        }
+        System.arraycopy(tmpBuffer, 0, buffer, bytesPending, bytesRead);
+        bytesPending += bytesRead;
+    }
+
+    protected @Nullable StreamRecord buildRecord(ByteBuffer byteBuffer) throws SQLException, StreamException {
+        byteBuffer.mark();
+        int headerSize = byteBuffer.getInt();
+        int payloadSize = byteBuffer.getInt();
+        byteBuffer.reset();
+
+        int recordSize = headerSize + payloadSize;
+        if (byteBuffer.remaining() < recordSize) {
+            return null;
+        }
+
+        byte[] recordBytes = new byte[recordSize];
+        byteBuffer.get(recordBytes);
+        return recordBuilder.buildRecord(recordBytes);
     }
 
     @Override

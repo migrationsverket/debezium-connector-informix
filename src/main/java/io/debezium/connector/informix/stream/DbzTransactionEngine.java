@@ -12,6 +12,7 @@ import static com.informix.jdbc.stream.api.StreamRecordType.DELETE;
 import static com.informix.jdbc.stream.api.StreamRecordType.INSERT;
 import static com.informix.jdbc.stream.api.StreamRecordType.ROLLBACK;
 import static com.informix.jdbc.stream.api.StreamRecordType.TRUNCATE;
+import static java.lang.Thread.currentThread;
 
 import java.sql.SQLException;
 import java.util.ArrayDeque;
@@ -24,12 +25,16 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.informix.jdbc.IfmxTableDescriptor;
+import com.informix.jdbc.stream.api.RecordStream;
+import com.informix.jdbc.stream.api.StreamListener;
 import com.informix.jdbc.stream.api.StreamRecord;
 import com.informix.jdbc.stream.api.StreamRecordType;
 import com.informix.jdbc.stream.api.TransactionEngine;
@@ -48,7 +53,7 @@ import io.debezium.relational.TableId;
  * @author Lars M Johansson
  *
  */
-public class DbzTransactionEngine implements TransactionEngine {
+public class DbzTransactionEngine implements TransactionEngine, RecordStream {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DbzTransactionEngine.class);
     private static final String PROCESSING_RECORD = "Processing {} record";
@@ -63,6 +68,9 @@ public class DbzTransactionEngine implements TransactionEngine {
     protected final Map<Integer, TransactionHolder> transactionMap;
     protected final Deque<StreamRecord> recordsQueue;
     protected Map<String, TableId> tableIdByLabelId;
+    private final List<Consumer<StreamRecord>> listeners;
+    private final List<StreamException> exceptions;
+    private boolean stopOnError = true;
 
     public static Builder builder(InformixConnection connection) {
         return new Builder(connection);
@@ -77,13 +85,16 @@ public class DbzTransactionEngine implements TransactionEngine {
         this.transactionFilters = EnumSet.of(COMMIT, ROLLBACK);
         this.transactionMap = new ConcurrentSkipListMap<>();
         this.recordsQueue = new ArrayDeque<>();
+        this.listeners = new CopyOnWriteArrayList<>();
+        this.exceptions = new ArrayList<>();
     }
 
     @Override
     public StreamRecord getRecord() throws SQLException, StreamException {
-        while (context.isRunning() && recordsQueue.isEmpty() && !recordsQueue.addAll(processRecords())) {
+        while (context.isRunning() && recordsQueue.isEmpty()) {
+            processRecords();
             // No transactions committed but also none in flight, no more data?
-            if (transactionMap.isEmpty()) {
+            if (recordsQueue.isEmpty() && transactionMap.isEmpty()) {
                 break;
             }
         }
@@ -95,8 +106,11 @@ public class DbzTransactionEngine implements TransactionEngine {
         return engine.getRecords();
     }
 
-    List<StreamRecord> processRecords() throws SQLException, StreamException {
-        return this.getRecords().stream().map(this::processRecord).filter(Objects::nonNull).toList();
+    void processRecords() throws SQLException, StreamException {
+        this.getRecords().stream().map(this::processRecord).filter(Objects::nonNull)
+                .peek(recordsQueue::offer).forEach(
+                        record -> listeners.forEach(
+                                listener -> listener.accept(record)));
     }
 
     StreamRecord processRecord(StreamRecord streamRecord) {
@@ -209,6 +223,65 @@ public class DbzTransactionEngine implements TransactionEngine {
 
     public Map<String, TableId> getTableIdByLabelId() {
         return tableIdByLabelId;
+    }
+
+    @Override
+    public void run() {
+
+        while (context.isRunning() && !currentThread().isInterrupted() && (!stopOnError || exceptions.isEmpty())) {
+            try {
+                processRecords();
+            }
+            catch (SQLException e) {
+                exceptions.add(new StreamException("SQL exception caught processing records ", e));
+            }
+            catch (StreamException e) {
+                exceptions.add(e);
+            }
+        }
+    }
+
+    RecordStream addListener(Consumer<StreamRecord> listener) {
+        listeners.add(listener);
+        return this;
+    }
+
+    @Override
+    public RecordStream addListener(StreamListener listener) {
+        return addListener((Consumer<StreamRecord>) record -> {
+            try {
+                listener.accept(record);
+            }
+            catch (SQLException e) {
+                exceptions.add(new StreamException("SQL exception occurred in listener [%s] while processing record [%s]".formatted(listener, record), e));
+            }
+            catch (StreamException e) {
+                exceptions.add(e);
+            }
+        });
+    }
+
+    public RecordStream addListener(DbzStreamListener listener) {
+        return addListener((Consumer<StreamRecord>) record -> {
+            try {
+                listener.accept(record);
+            }
+            catch (SQLException e) {
+                exceptions.add(new StreamException("SQL exception occurred in listener [%s] while processing record [%s]".formatted(listener, record), e));
+            }
+            catch (StreamException e) {
+                exceptions.add(e);
+            }
+            catch (InterruptedException e) {
+                LOGGER.error("Caught InterruptedException", e);
+                currentThread().interrupt();
+            }
+        });
+    }
+
+    @Override
+    public List<StreamException> getExceptions() {
+        return exceptions;
     }
 
     protected static class TransactionHolder {
