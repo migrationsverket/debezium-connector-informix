@@ -5,10 +5,17 @@
  */
 package io.debezium.connector.informix.stream;
 
+import static java.lang.Thread.currentThread;
+
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.informix.jdbc.stream.api.RecordStream;
 import com.informix.jdbc.stream.api.StreamListener;
@@ -18,10 +25,11 @@ import com.informix.jdbc.stream.impl.StreamException;
 import io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext;
 
 public class DbzRecordStreamRunner implements RecordStream {
+    private static final Logger LOGGER = LoggerFactory.getLogger(DbzRecordStreamRunner.class);
 
     protected final ChangeEventSourceContext context;
     protected final DbzTransactionEngine engine;
-    protected final List<StreamListener> listeners = new CopyOnWriteArrayList<>();
+    protected final List<Consumer<StreamRecord>> listeners = new CopyOnWriteArrayList<>();
     protected final List<StreamException> exceptions = new ArrayList<>();
     protected final boolean stopOnError;
 
@@ -40,33 +48,16 @@ public class DbzRecordStreamRunner implements RecordStream {
         try {
             engine.init();
         }
-        catch (SQLException e) {
-            exceptions.add(new StreamException("SQL exception caught during engine initialization ", e));
-            return;
-        }
         catch (StreamException e) {
             exceptions.add(e);
             return;
         }
 
-        while (context.isRunning() && (!stopOnError || exceptions.isEmpty())) {
+        while (context.isRunning() && !currentThread().isInterrupted() && (!stopOnError || exceptions.isEmpty())) {
             try {
-                for (StreamRecord sr : engine.getRecords()) {
-                    StreamRecord pr = engine.processRecord(sr);
-                    if (pr != null) {
-                        for (StreamListener listener : listeners) {
-                            try {
-                                listener.accept(pr);
-                            }
-                            catch (SQLException e) {
-                                exceptions.add(new StreamException("SQL exception occurred in listener [%s] while processing record [%s]".formatted(listener, pr), e));
-                            }
-                            catch (StreamException e) {
-                                exceptions.add(e);
-                            }
-                        }
-                    }
-                }
+                engine.getRecords().stream().map(engine::processRecord).filter(Objects::nonNull)
+                        .forEach(record -> listeners
+                                .forEach(listener -> listener.accept(record)));
             }
             catch (SQLException e) {
                 exceptions.add(new StreamException("SQL exception caught processing records ", e));
@@ -77,10 +68,42 @@ public class DbzRecordStreamRunner implements RecordStream {
         }
     }
 
-    @Override
-    public RecordStream addListener(StreamListener streamListener) {
-        listeners.add(streamListener);
+    RecordStream addListener(Consumer<StreamRecord> listener) {
+        listeners.add(listener);
         return this;
+    }
+
+    @Override
+    public RecordStream addListener(StreamListener listener) {
+        return addListener((Consumer<StreamRecord>) record -> {
+            try {
+                listener.accept(record);
+            }
+            catch (SQLException e) {
+                exceptions.add(new StreamException("SQL exception occurred in listener [%s] while processing record [%s]".formatted(listener, record), e));
+            }
+            catch (StreamException e) {
+                exceptions.add(e);
+            }
+        });
+    }
+
+    public RecordStream addListener(DbzStreamListener listener) {
+        return addListener((Consumer<StreamRecord>) record -> {
+            try {
+                listener.accept(record);
+            }
+            catch (SQLException e) {
+                exceptions.add(new StreamException("SQL exception occurred in listener [%s] while processing record [%s]".formatted(listener, record), e));
+            }
+            catch (StreamException e) {
+                exceptions.add(e);
+            }
+            catch (InterruptedException e) {
+                LOGGER.error("Caught InterruptedException", e);
+                currentThread().interrupt();
+            }
+        });
     }
 
     @Override
@@ -89,7 +112,7 @@ public class DbzRecordStreamRunner implements RecordStream {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         engine.close();
     }
 }

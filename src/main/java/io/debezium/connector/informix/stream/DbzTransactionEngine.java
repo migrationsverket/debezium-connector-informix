@@ -12,29 +12,23 @@ import static com.informix.jdbc.stream.api.StreamRecordType.DELETE;
 import static com.informix.jdbc.stream.api.StreamRecordType.INSERT;
 import static com.informix.jdbc.stream.api.StreamRecordType.ROLLBACK;
 import static com.informix.jdbc.stream.api.StreamRecordType.TRUNCATE;
-import static java.lang.Thread.currentThread;
 
 import java.sql.SQLException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
+
+import javax.sql.DataSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.informix.jdbc.IfmxTableDescriptor;
-import com.informix.jdbc.stream.api.RecordStream;
-import com.informix.jdbc.stream.api.StreamListener;
 import com.informix.jdbc.stream.api.StreamRecord;
 import com.informix.jdbc.stream.api.StreamRecordType;
 import com.informix.jdbc.stream.api.TransactionEngine;
@@ -42,7 +36,6 @@ import com.informix.jdbc.stream.cdc.CDCEngine.IfmxWatchedTable;
 import com.informix.jdbc.stream.cdc.records.CDCBeginTransactionRecord;
 import com.informix.jdbc.stream.impl.StreamException;
 
-import io.debezium.connector.informix.InformixConnection;
 import io.debezium.connector.informix.InformixStreamTransactionRecord;
 import io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext;
 import io.debezium.relational.TableId;
@@ -53,7 +46,7 @@ import io.debezium.relational.TableId;
  * @author Lars M Johansson
  *
  */
-public class DbzTransactionEngine implements TransactionEngine, RecordStream {
+public class DbzTransactionEngine implements TransactionEngine {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DbzTransactionEngine.class);
     private static final String PROCESSING_RECORD = "Processing {} record";
@@ -66,14 +59,10 @@ public class DbzTransactionEngine implements TransactionEngine, RecordStream {
     protected EnumSet<StreamRecordType> operationFilters;
     protected EnumSet<StreamRecordType> transactionFilters;
     protected final Map<Integer, TransactionHolder> transactionMap;
-    protected final Deque<StreamRecord> recordsQueue;
     protected Map<String, TableId> tableIdByLabelId;
-    private final List<Consumer<StreamRecord>> listeners;
-    private final List<StreamException> exceptions;
-    private boolean stopOnError = true;
 
-    public static Builder builder(InformixConnection connection) {
-        return new Builder(connection);
+    public static Builder builder(DataSource dataSource) {
+        return new Builder(dataSource);
     }
 
     protected DbzTransactionEngine(Builder builder) {
@@ -84,33 +73,16 @@ public class DbzTransactionEngine implements TransactionEngine, RecordStream {
         this.operationFilters = EnumSet.of(INSERT, DELETE, BEFORE_UPDATE, AFTER_UPDATE, TRUNCATE);
         this.transactionFilters = EnumSet.of(COMMIT, ROLLBACK);
         this.transactionMap = new ConcurrentSkipListMap<>();
-        this.recordsQueue = new ArrayDeque<>();
-        this.listeners = new CopyOnWriteArrayList<>();
-        this.exceptions = new ArrayList<>();
     }
 
     @Override
     public StreamRecord getRecord() throws SQLException, StreamException {
-        while (context.isRunning() && recordsQueue.isEmpty()) {
-            processRecords();
-            // No transactions committed but also none in flight, no more data?
-            if (recordsQueue.isEmpty() && transactionMap.isEmpty()) {
-                break;
-            }
-        }
-        return recordsQueue.poll();
+        return engine.getRecord();
     }
 
     @Override
     public List<StreamRecord> getRecords() throws SQLException, StreamException {
         return engine.getRecords();
-    }
-
-    void processRecords() throws SQLException, StreamException {
-        this.getRecords().stream().map(this::processRecord).filter(Objects::nonNull)
-                .peek(recordsQueue::offer).forEach(
-                        record -> listeners.forEach(
-                                listener -> listener.accept(record)));
     }
 
     StreamRecord processRecord(StreamRecord streamRecord) {
@@ -174,9 +146,11 @@ public class DbzTransactionEngine implements TransactionEngine, RecordStream {
 
     @Override
     public InformixStreamTransactionRecord getTransaction() throws SQLException, StreamException {
-        StreamRecord streamRecord;
-        while ((streamRecord = getRecord()) != null && !(streamRecord instanceof InformixStreamTransactionRecord)) {
-            LOGGER.debug("Discard non-transaction record: {}", streamRecord);
+        StreamRecord streamRecord = null;
+        while (context.isRunning() && !((streamRecord = processRecord(engine.getRecord())) instanceof InformixStreamTransactionRecord)) {
+            if (streamRecord != null) {
+                LOGGER.debug("Discard non-transaction record: {}", streamRecord);
+            }
         }
         return (InformixStreamTransactionRecord) streamRecord;
     }
@@ -200,7 +174,7 @@ public class DbzTransactionEngine implements TransactionEngine, RecordStream {
     }
 
     @Override
-    public void init() throws SQLException, StreamException {
+    public void init() throws StreamException {
         engine.init();
 
         /*
@@ -213,7 +187,7 @@ public class DbzTransactionEngine implements TransactionEngine, RecordStream {
     }
 
     @Override
-    public void close() throws StreamException {
+    public void close() {
         engine.close();
     }
 
@@ -223,65 +197,6 @@ public class DbzTransactionEngine implements TransactionEngine, RecordStream {
 
     public Map<String, TableId> getTableIdByLabelId() {
         return tableIdByLabelId;
-    }
-
-    @Override
-    public void run() {
-
-        while (context.isRunning() && !currentThread().isInterrupted() && (!stopOnError || exceptions.isEmpty())) {
-            try {
-                processRecords();
-            }
-            catch (SQLException e) {
-                exceptions.add(new StreamException("SQL exception caught processing records ", e));
-            }
-            catch (StreamException e) {
-                exceptions.add(e);
-            }
-        }
-    }
-
-    RecordStream addListener(Consumer<StreamRecord> listener) {
-        listeners.add(listener);
-        return this;
-    }
-
-    @Override
-    public RecordStream addListener(StreamListener listener) {
-        return addListener((Consumer<StreamRecord>) record -> {
-            try {
-                listener.accept(record);
-            }
-            catch (SQLException e) {
-                exceptions.add(new StreamException("SQL exception occurred in listener [%s] while processing record [%s]".formatted(listener, record), e));
-            }
-            catch (StreamException e) {
-                exceptions.add(e);
-            }
-        });
-    }
-
-    public RecordStream addListener(DbzStreamListener listener) {
-        return addListener((Consumer<StreamRecord>) record -> {
-            try {
-                listener.accept(record);
-            }
-            catch (SQLException e) {
-                exceptions.add(new StreamException("SQL exception occurred in listener [%s] while processing record [%s]".formatted(listener, record), e));
-            }
-            catch (StreamException e) {
-                exceptions.add(e);
-            }
-            catch (InterruptedException e) {
-                LOGGER.error("Caught InterruptedException", e);
-                currentThread().interrupt();
-            }
-        });
-    }
-
-    @Override
-    public List<StreamException> getExceptions() {
-        return exceptions;
     }
 
     protected static class TransactionHolder {
@@ -301,12 +216,12 @@ public class DbzTransactionEngine implements TransactionEngine, RecordStream {
         private ChangeEventSourceContext context;
         private boolean returnEmptyTransactions = false;
 
-        protected Builder(InformixConnection connection) {
-            this.builder = DbzCDCEngine.builder(connection);
+        protected Builder(DataSource dataSource) {
+            this.builder = DbzCDCEngine.builder(dataSource);
         }
 
-        public InformixConnection getConnection() {
-            return builder.getConnection();
+        public DataSource getDataSource() {
+            return builder.getDataSource();
         }
 
         public Builder context(ChangeEventSourceContext context) {

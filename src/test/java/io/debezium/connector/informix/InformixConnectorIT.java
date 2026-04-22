@@ -774,7 +774,7 @@ public class InformixConnectorIT extends AbstractAsyncEngineConnectorTest {
                     ps.setBytes(2, "bytes".getBytes());
                 }).commit();
 
-        waitForAvailableRecords(waitTimeForRecords() * 5L, TimeUnit.SECONDS);
+        waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS);
 
         final SourceRecords records = consumeRecordsByTopic(expectedRecords);
         final List<SourceRecord> table = records.recordsForTopic("testdb.informix.dt_table");

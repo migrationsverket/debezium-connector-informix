@@ -32,7 +32,7 @@ import com.informix.jdbc.stream.impl.StreamException;
 import com.informix.jdbc.types.ReadableType;
 import com.informix.lang.IfxTypes;
 
-import io.debezium.DebeziumException;
+import io.debezium.connector.informix.stream.DbzRecordStreamRunner;
 import io.debezium.connector.informix.stream.DbzStreamListener;
 import io.debezium.connector.informix.stream.DbzTransactionEngine;
 import io.debezium.data.Envelope.Operation;
@@ -94,11 +94,9 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
      * transactions, releasing locks etc.
      *
      * @param context contextual information for this source's execution
-     * @throws InterruptedException in case the snapshot was aborted before completion
      */
     @Override
-    public void execute(ChangeEventSourceContext context, InformixPartition partition, InformixOffsetContext offsetContext)
-            throws InterruptedException {
+    public void execute(ChangeEventSourceContext context, InformixPartition partition, InformixOffsetContext offsetContext) {
 
         // Need to refresh schema before CDCEngine is started, to capture columns added in off-line schema evolution
         schema.tableIds().stream().map(TableId::schema).distinct().forEach(schemaName -> {
@@ -123,10 +121,15 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
         Lsn lastBeginLsn = lastPosition.getBeginLsn();
         Lsn beginLsn = lastBeginLsn.isAvailable() ? lastBeginLsn : lastCommitLsn;
 
-        try (DbzTransactionEngine transactionEngine = getTransactionEngine(context, schema, beginLsn)) {
-            transactionEngine.init();
+        try (DbzTransactionEngine engine = getTransactionEngine(context, schema, beginLsn);
+                DbzRecordStreamRunner streamRunner = new DbzRecordStreamRunner(context, engine, true)) {
 
-            transactionEngine.addListener((DbzStreamListener) streamRecord -> {
+            streamRunner.addListener((DbzStreamListener) streamRecord -> {
+
+                if (streamRecord == null) {
+                    LOGGER.debug(RECEIVED_GENERIC_RECORD, null, 0);
+                    return;
+                }
 
                 if (context.isPaused()) {
                     LOGGER.info("Streaming will now pause");
@@ -136,11 +139,6 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
                 }
 
                 dispatcher.dispatchHeartbeatEvent(partition, offsetContext);
-
-                if (streamRecord == null) {
-                    LOGGER.debug(RECEIVED_GENERIC_RECORD, streamRecord, 0);
-                    return;
-                }
 
                 switch (streamRecord.getType()) {
                     case TRANSACTION_GROUP -> {
@@ -165,9 +163,9 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
                                 recovering.set(false);
                             }
                         }
-                        handleTransaction(transactionEngine, partition, offsetContext, transactionRecord, recovering.get());
+                        handleTransaction(engine, partition, offsetContext, transactionRecord, recovering.get());
                     }
-                    case METADATA -> handleMetadata(partition, offsetContext, transactionEngine, (CDCMetaDataRecord) streamRecord);
+                    case METADATA -> handleMetadata(partition, offsetContext, engine, (CDCMetaDataRecord) streamRecord);
                     case TIMEOUT -> LOGGER.trace(RECEIVED_GENERIC_RECORD, streamRecord, 0);
                     case ERROR -> LOGGER.error(RECEIVED_GENERIC_RECORD, streamRecord, 0);
                     default -> LOGGER.warn(RECEIVED_UNKNOWN_RECORD_TYPE, streamRecord, 0);
@@ -185,12 +183,12 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
             /*
              * Main Handler Loop
              */
-            transactionEngine.run();
+            streamRunner.run();
 
-            transactionEngine.getExceptions().forEach(errorHandler::setProducerThrowable);
+            streamRunner.getExceptions().forEach(errorHandler::setProducerThrowable);
 
         }
-        catch (SQLException | StreamException | DebeziumException e) {
+        catch (Exception e) {
             LOGGER.error("Caught Exception", e);
             errorHandler.setProducerThrowable(e);
         }
@@ -209,7 +207,7 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
     private DbzTransactionEngine getTransactionEngine(ChangeEventSourceContext context, InformixDatabaseSchema schema, Lsn startLsn)
             throws SQLException {
         DbzTransactionEngine.Builder builder = DbzTransactionEngine
-                .builder(dataConnection)
+                .builder(dataConnection.datasource())
                 .buffer(connectorConfig.getCdcBuffersize())
                 .maxRecords(connectorConfig.getCdcMaxRecords())
                 .timeout(connectorConfig.getCdcTimeout())
