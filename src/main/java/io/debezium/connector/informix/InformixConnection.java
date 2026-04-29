@@ -5,6 +5,7 @@
  */
 package io.debezium.connector.informix;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Optional;
@@ -14,7 +15,6 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.informix.jdbc.IfxDriver;
 import com.informix.jdbcx.IfxDataSource;
 import com.informix.lang.IfxTypes;
 
@@ -54,11 +54,7 @@ public class InformixConnection extends JdbcConnection {
             + JdbcConfiguration.USER + "};password=${"
             + JdbcConfiguration.PASSWORD + "}";
 
-    private static final ConnectionFactory FACTORY = JdbcConnection.patternBasedFactory(
-            URL_PATTERN,
-            IfxDriver.class.getCanonicalName(),
-            InformixConnection.class.getClassLoader(),
-            JdbcConfiguration.PORT.withDefault(InformixConnectorConfig.PORT.defaultValueAsString()));
+    private static final ConnectionFactory FACTORY = new DatasourceConnectionFactory();
 
     /**
      * Creates a new connection using the supplied configuration.
@@ -176,5 +172,24 @@ public class InformixConnection extends JdbcConnection {
         IfxDataSource datasource = new IfxDataSource(connectionString());
         datasource.getDsProperties().putAll(config().withoutKnownFields().asProperties());
         return datasource;
+    }
+
+    private static class DatasourceConnectionFactory implements ConnectionFactory {
+
+        private final IfxDataSource datasource;
+
+        DatasourceConnectionFactory() {
+            this.datasource = new IfxDataSource();
+        }
+
+        @Override
+        public Connection connect(JdbcConfiguration config) throws SQLException {
+            datasource.getDsProperties().putAll(config.edit()
+                    .with("IFXHOST", config.getHostname())
+                    .with("PORTNO", config.getPortAsString())
+                    .with("DATABASE", config.getDatabase())
+                    .build().asProperties());
+            return datasource.getConnection();
+        }
     }
 }
