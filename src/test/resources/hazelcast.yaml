@@ -1,10 +1,10 @@
 hazelcast:
   cache:
-    "transaction-cache":
+    "hazelcast-transaction-cache":
       key-type:
         class-name: java.lang.Long
       value-type:
-        class-name: com.informix.stream.api.IfmxStreamRecord
+        class-name: com.informix.jdbc.stream.api.StreamRecord
       in-memory-format: OBJECT
       eviction:
         size: 10000
