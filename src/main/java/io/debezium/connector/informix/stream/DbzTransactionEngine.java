@@ -13,16 +13,25 @@ import static com.informix.jdbc.stream.api.StreamRecordType.INSERT;
 import static com.informix.jdbc.stream.api.StreamRecordType.ROLLBACK;
 import static com.informix.jdbc.stream.api.StreamRecordType.TRUNCATE;
 
+import java.net.URI;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.stream.Collectors;
 
+import javax.cache.Cache;
+import javax.cache.CacheManager;
+import javax.cache.Caching;
+import javax.cache.configuration.FactoryBuilder;
+import javax.cache.configuration.MutableCacheEntryListenerConfiguration;
+import javax.cache.spi.CachingProvider;
 import javax.sql.DataSource;
 
 import org.slf4j.Logger;
@@ -51,10 +60,12 @@ public class DbzTransactionEngine implements TransactionEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(DbzTransactionEngine.class);
     private static final String PROCESSING_RECORD = "Processing {} record";
     private static final String MISSING_TRANSACTION_START_FOR_RECORD = "Missing transaction start for record: {}";
-
     protected final Builder builder;
     protected final DbzCDCEngine engine;
     protected final ChangeEventSourceContext context;
+    protected final CachingProvider cachingProvider;
+    protected final CacheManager cacheManager;
+    protected Cache<Long, StreamRecord> streamRecordCache;
     protected boolean returnEmptyTransactions;
     protected EnumSet<StreamRecordType> operationFilters;
     protected EnumSet<StreamRecordType> transactionFilters;
@@ -69,6 +80,18 @@ public class DbzTransactionEngine implements TransactionEngine {
         this.builder = builder;
         this.engine = builder.engine;
         this.context = builder.context;
+        Optional<CachingProvider> cachingProvider = Optional.ofNullable(builder.jCacheProviderClassName).map(Caching::getCachingProvider);
+        Optional<URI> jCacheURI = Optional.ofNullable(builder.jCacheUri).map(ClassLoader::getSystemResource).map(url -> {
+            try {
+                return url.toURI();
+            }
+            catch (Exception e) {
+                return null;
+            }
+        });
+        this.cacheManager = jCacheURI.flatMap(uri -> cachingProvider.map(cp -> cp.getCacheManager(uri, null)))
+                .or(() -> cachingProvider.map(CachingProvider::getCacheManager)).orElse(null);
+        this.cachingProvider = cachingProvider.orElse(null);
         this.returnEmptyTransactions = builder.returnEmptyTransactions;
         this.operationFilters = EnumSet.of(INSERT, DELETE, BEFORE_UPDATE, AFTER_UPDATE, TRUNCATE);
         this.transactionFilters = EnumSet.of(COMMIT, ROLLBACK);
@@ -103,7 +126,7 @@ public class DbzTransactionEngine implements TransactionEngine {
                     break;
                 }
                 LOGGER.debug(PROCESSING_RECORD, streamRecord.getType());
-                holder.records.add(streamRecord);
+                holder.appendRecord(streamRecord);
             }
             case DISCARD -> {
                 if (holder == null) {
@@ -113,7 +136,7 @@ public class DbzTransactionEngine implements TransactionEngine {
                 LOGGER.debug(PROCESSING_RECORD, streamRecord.getType());
                 long sequenceId = streamRecord.getSequenceId();
 
-                if (holder.records.removeIf(r -> r.getSequenceId() >= sequenceId)) {
+                if (holder.discardRecordsAfter(sequenceId)) {
                     LOGGER.debug("Discarding records with sequence >={}", sequenceId);
                 }
             }
@@ -130,13 +153,13 @@ public class DbzTransactionEngine implements TransactionEngine {
                 if (holder == null) {
                     return streamRecord;
                 }
-                holder.records.add(streamRecord);
+                holder.appendRecord(streamRecord);
             }
             default -> LOGGER.warn("Unknown operation for record: {}", streamRecord);
         }
         if (holder != null && holder.closingRecord != null) {
             transactionMap.remove(streamRecord.getTransactionId());
-            if (!holder.records.isEmpty() || returnEmptyTransactions) {
+            if (!holder.isRecordsEmpty() || returnEmptyTransactions) {
                 return new InformixStreamTransactionRecord(holder.beginRecord, holder.closingRecord, holder.records);
             }
         }
@@ -177,6 +200,14 @@ public class DbzTransactionEngine implements TransactionEngine {
     public void init() throws StreamException {
         engine.init();
 
+        if (cacheManager != null && !cacheManager.isClosed()) {
+            streamRecordCache = cacheManager.getCache(builder.transactionCacheName);
+            if (streamRecordCache != null) {
+                streamRecordCache.registerCacheEntryListener(
+                        new MutableCacheEntryListenerConfiguration<>(FactoryBuilder.factoryOf(DbzCacheEntryExpiredListener.class), null, true, true));
+            }
+        }
+
         /*
          * Build Map of Label_id to TableId.
          */
@@ -189,6 +220,10 @@ public class DbzTransactionEngine implements TransactionEngine {
     @Override
     public void close() {
         engine.close();
+
+        if (cachingProvider != null) {
+            cachingProvider.close();
+        }
     }
 
     public OptionalLong getLowestBeginSequence() {
@@ -199,10 +234,38 @@ public class DbzTransactionEngine implements TransactionEngine {
         return tableIdByLabelId;
     }
 
-    protected static class TransactionHolder {
+    protected class TransactionHolder {
         final List<StreamRecord> records = new ArrayList<>();
+        final Set<Long> sequenceIds = new ConcurrentSkipListSet<>();
         CDCBeginTransactionRecord beginRecord;
         StreamRecord closingRecord;
+
+        public List<StreamRecord> getRecords() {
+            if (streamRecordCache != null) {
+                return List.copyOf(streamRecordCache.getAll(sequenceIds).values());
+            }
+            return records;
+        }
+
+        boolean appendRecord(StreamRecord streamRecord) {
+            if (streamRecordCache != null) {
+                streamRecordCache.putIfAbsent(streamRecord.getSequenceId(), streamRecord);
+                return sequenceIds.add(streamRecord.getSequenceId());
+            }
+            return records.add(streamRecord);
+        }
+
+        boolean discardRecordsAfter(long sequenceId) {
+            if (streamRecordCache != null) {
+                streamRecordCache.removeAll(sequenceIds.stream().filter(id -> id >= sequenceId).collect(Collectors.toSet()));
+                return sequenceIds.removeIf(id -> id >= sequenceId);
+            }
+            return records.removeIf(r -> r.getSequenceId() >= sequenceId);
+        }
+
+        boolean isRecordsEmpty() {
+            return records.isEmpty() && sequenceIds.isEmpty();
+        }
     }
 
     public Builder getBuilder() {
@@ -215,6 +278,9 @@ public class DbzTransactionEngine implements TransactionEngine {
         private DbzCDCEngine engine;
         private ChangeEventSourceContext context;
         private boolean returnEmptyTransactions = false;
+        private String jCacheProviderClassName;
+        private String jCacheUri;
+        private String transactionCacheName;
 
         protected Builder(DataSource dataSource) {
             this.builder = DbzCDCEngine.builder(dataSource);
@@ -291,6 +357,21 @@ public class DbzTransactionEngine implements TransactionEngine {
 
         public Builder returnEmptyTransactions(boolean returnEmptyTransactions) {
             this.returnEmptyTransactions = returnEmptyTransactions;
+            return this;
+        }
+
+        public Builder jCacheProviderClassName(String jCacheProviderClassName) {
+            this.jCacheProviderClassName = jCacheProviderClassName;
+            return this;
+        }
+
+        public Builder jCacheUri(String jCacheUri) {
+            this.jCacheUri = jCacheUri;
+            return this;
+        }
+
+        public Builder transactionCacheName(String transactionCacheName) {
+            this.transactionCacheName = transactionCacheName;
             return this;
         }
 

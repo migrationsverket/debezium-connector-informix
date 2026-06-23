@@ -211,6 +211,9 @@ public class InformixStreamingChangeEventSource implements StreamingChangeEventS
                 .timeout(connectorConfig.getCdcTimeout())
                 .stopLoggingOnClose(connectorConfig.stopLoggingOnClose())
                 .returnEmptyTransactions(connectorConfig.returnEmptytransactions())
+                .transactionCacheName(connectorConfig.getTransactionCacheName())
+                .jCacheProviderClassName(connectorConfig.getJCacheProviderClassName())
+                .jCacheUri(connectorConfig.getJCacheUri())
                 .context(context);
 
         reselectColumns.clear();
