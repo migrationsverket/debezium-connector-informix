@@ -88,6 +88,13 @@ public abstract class AbstractInformixDatatypesTest extends AbstractAsyncEngineC
             "  val_numeric numeric(10,0)" +
             ");";
 
+    private static final String DDL_BOOL = "create table type_bool (" +
+            "  id serial not null primary key, " +
+            "  val_false boolean, " +
+            "  val_true boolean, " +
+            "  val_null boolean " +
+            ");";
+
     private static final String DDL_TIME = "create table type_time (" +
             "  id serial not null primary key, " +
             "  val_date date, " +
@@ -154,6 +161,11 @@ public abstract class AbstractInformixDatatypesTest extends AbstractAsyncEngineC
             new SchemaAndValueField("val_bigint", Schema.OPTIONAL_INT64_SCHEMA, 55555L),
             new SchemaAndValueField("val_decimal", SpecialValueDecimal.builder(DecimalMode.PRECISE, 10, 0).optional().build(), BigDecimal.valueOf(99999_99999L)),
             new SchemaAndValueField("val_numeric", SpecialValueDecimal.builder(DecimalMode.PRECISE, 10, 0).optional().build(), BigDecimal.valueOf(99999_99999L)));
+
+    private static final List<SchemaAndValueField> EXPECTED_BOOL = Arrays.asList(
+            new SchemaAndValueField("val_false", Schema.OPTIONAL_BOOLEAN_SCHEMA, false),
+            new SchemaAndValueField("val_true", Schema.OPTIONAL_BOOLEAN_SCHEMA, true),
+            new SchemaAndValueField("val_null", Schema.OPTIONAL_BOOLEAN_SCHEMA, null));
 
     private static final List<SchemaAndValueField> EXPECTED_TIME_AS_ADAPTIVE = Arrays.asList(
             new SchemaAndValueField("val_date", Date.builder().optional().build(),
@@ -246,6 +258,7 @@ public abstract class AbstractInformixDatatypesTest extends AbstractAsyncEngineC
             "testdb:informix.type_string",
             "testdb:informix.type_fp",
             "testdb:informix.type_int",
+            "testdb:informix.type_bool",
             "testdb:informix.type_time",
             "testdb:informix.type_clob"
     };
@@ -254,6 +267,7 @@ public abstract class AbstractInformixDatatypesTest extends AbstractAsyncEngineC
             DDL_STRING,
             DDL_FP,
             DDL_INT,
+            DDL_BOOL,
             DDL_TIME,
             DDL_CLOB
     };
@@ -486,6 +500,42 @@ public abstract class AbstractInformixDatatypesTest extends AbstractAsyncEngineC
 
         Struct after = (Struct) ((Struct) record.value()).get("after");
         assertRecord(after, EXPECTED_INT);
+    }
+
+    @Test
+    @FixFor("dbz#2354")
+    public void boolTypes() throws Exception {
+        init("testdb.informix.type_bool");
+
+        int expectedRecordCount = 0;
+
+        if (insertRecordsDuringTest()) {
+            consumeRecord();
+            waitForStreamingRunning(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
+            insertBoolTypes();
+        }
+        waitForAvailableRecords(waitTimeForRecords(), TimeUnit.SECONDS);
+
+        expectedRecordCount++;
+
+        final SourceRecords records = consumeRecordsByTopic(expectedRecordCount);
+
+        List<SourceRecord> testTableRecords = records.recordsForTopic("testdb.informix.type_bool");
+        assertThat(testTableRecords).hasSize(expectedRecordCount);
+        SourceRecord record = testTableRecords.get(0);
+
+        VerifyRecord.isValid(record);
+
+        // insert
+        if (insertRecordsDuringTest()) {
+            VerifyRecord.isValidInsert(record, true);
+        }
+        else {
+            VerifyRecord.isValidRead(record);
+        }
+
+        Struct after = (Struct) ((Struct) record.value()).get("after");
+        assertRecord(after, EXPECTED_BOOL);
     }
 
     @Test
@@ -762,6 +812,11 @@ public abstract class AbstractInformixDatatypesTest extends AbstractAsyncEngineC
     protected static void insertIntTypes() throws SQLException {
         connection.execute(
                 "INSERT INTO type_int VALUES (0, 1, 22, 333, 4444, 55555, 9999999999, 9999999999)");
+    }
+
+    protected static void insertBoolTypes() throws SQLException {
+        connection.execute(
+                "INSERT INTO type_bool VALUES (0, 'f', 't', null)");
     }
 
     protected static void insertTimeTypes() throws SQLException {
