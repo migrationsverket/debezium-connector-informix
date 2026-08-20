@@ -10,14 +10,11 @@ import java.util.concurrent.TimeUnit;
 import org.apache.kafka.connect.data.Schema;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.extension.ExtendWith;
 
 import io.debezium.config.Configuration;
 import io.debezium.connector.informix.InformixConnectorConfig.SnapshotMode;
 import io.debezium.connector.informix.util.TestHelper;
 import io.debezium.jdbc.JdbcConnection;
-import io.debezium.junit.ConditionalFailExtension;
-import io.debezium.junit.Flaky;
 import io.debezium.transforms.outbox.AbstractEventRouterTest;
 import io.debezium.transforms.outbox.EventRouter;
 
@@ -26,8 +23,6 @@ import io.debezium.transforms.outbox.EventRouter;
  *
  * @author Chris Cranford, Lars M Johansson
  */
-@Flaky("DBZ-8114")
-@ExtendWith(ConditionalFailExtension.class)
 public class OutboxEventRouterIT extends AbstractEventRouterTest<InformixConnector> {
 
     private static final String SETUP_OUTBOX_TABLE = "CREATE TABLE outbox (" +
@@ -43,21 +38,18 @@ public class OutboxEventRouterIT extends AbstractEventRouterTest<InformixConnect
     @Override
     public void beforeEach() throws Exception {
         connection = TestHelper.testConnection();
-
-        initializeConnectorTestFramework();
-        Files.delete(TestHelper.SCHEMA_HISTORY_PATH);
-
         super.beforeEach();
+        Files.delete(TestHelper.SCHEMA_HISTORY_PATH);
     }
 
     @AfterEach
     public void afterEach() throws Exception {
-        stopConnector();
+        stopConnector(TestHelper.getLoggingCleanupCallback(tableName()));
         waitForConnectorShutdown(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
         assertConnectorNotRunning();
-        if (connection != null && connection.isConnected()) {
+        if (connection != null) {
             connection.rollback();
-            TestHelper.dropTable(connection, tableName());
+            TestHelper.dropTable(tableName());
             connection.close();
         }
     }
@@ -77,7 +69,7 @@ public class OutboxEventRouterIT extends AbstractEventRouterTest<InformixConnect
         final SnapshotMode snapshotMode = initialSnapshot ? SnapshotMode.INITIAL : SnapshotMode.NO_DATA;
         return TestHelper.defaultConfig()
                 .with(InformixConnectorConfig.SNAPSHOT_MODE, snapshotMode.getValue())
-                .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, TestHelper.TEST_DATABASE + "." + tableName());
+                .with(InformixConnectorConfig.TABLE_INCLUDE_LIST, fullTableName());
     }
 
     @Override
@@ -92,17 +84,21 @@ public class OutboxEventRouterIT extends AbstractEventRouterTest<InformixConnect
 
     @Override
     protected String tableName() {
-        return "informix.outbox";
+        return "outbox";
+    }
+
+    protected String fullTableName() {
+        return "%s.informix.%s".formatted(TestHelper.TEST_DATABASE, tableName());
     }
 
     @Override
     protected String topicName() {
-        return TestHelper.TEST_DATABASE + ".informix.outbox";
+        return fullTableName();
     }
 
     @Override
     protected void createTable() throws Exception {
-        TestHelper.dropTable(connection, tableName());
+        TestHelper.dropTable(tableName());
         connection.execute(SETUP_OUTBOX_TABLE);
     }
 

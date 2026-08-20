@@ -15,18 +15,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 
 import io.debezium.config.Configuration.Builder;
 import io.debezium.connector.informix.InformixConnectorConfig.SnapshotMode;
 import io.debezium.connector.informix.util.TestHelper;
 import io.debezium.jdbc.JdbcConnection;
-import io.debezium.junit.ConditionalFailExtension;
-import io.debezium.junit.Flaky;
 import io.debezium.pipeline.source.snapshot.incremental.AbstractIncrementalSnapshotTest;
 
-@Flaky("DBZ-8114")
-@ExtendWith(ConditionalFailExtension.class)
 public class IncrementalSnapshotIT extends AbstractIncrementalSnapshotTest<InformixConnector> {
 
     private InformixConnection connection;
@@ -34,13 +29,12 @@ public class IncrementalSnapshotIT extends AbstractIncrementalSnapshotTest<Infor
     @BeforeEach
     public void before() throws SQLException {
         connection = TestHelper.testConnection();
-        TestHelper.dropTables(connection, "a", "b", "c", "debezium_signal");
+        TestHelper.dropTables("a", "b", "c", "debezium_signal");
         connection.execute(
                 "CREATE TABLE a (pk int not null, aa int, primary key (pk))",
                 "CREATE TABLE b (pk int not null, aa int, primary key (pk))",
                 "CREATE TABLE c (pk1 int, pk2 int, pk3 int, pk4 int, aa int)",
                 "CREATE TABLE debezium_signal (id varchar(64), type varchar(32), data varchar(255))");
-        initializeConnectorTestFramework();
         Files.delete(TestHelper.SCHEMA_HISTORY_PATH);
         Print.disable();
     }
@@ -51,12 +45,12 @@ public class IncrementalSnapshotIT extends AbstractIncrementalSnapshotTest<Infor
          * Since all DDL operations are forbidden during Informix CDC,
          * we have to ensure the connector is properly shut down before dropping tables.
          */
-        stopConnector();
+        stopConnector(TestHelper.getLoggingCleanupCallback("a", "b", "c", "debezium_signal"));
         waitForConnectorShutdown(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
         assertConnectorNotRunning();
         if (connection != null) {
             connection.rollback();
-            TestHelper.dropTables(connection, "a", "b", "c", "debezium_signal");
+            TestHelper.dropTables("a", "b", "c", "debezium_signal");
             connection.close();
         }
     }

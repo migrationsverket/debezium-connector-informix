@@ -23,15 +23,14 @@ import io.debezium.jdbc.JdbcConnection;
 import io.debezium.junit.ConditionalFailExtension;
 import io.debezium.junit.Flaky;
 import io.debezium.pipeline.AbstractChunkedSnapshotTest;
-import io.debezium.util.Testing;
 
 /**
  * Informix-specific chunked table snapshot integration tests.
  *
  * @author Chris Cranford
  */
-@ExtendWith(ConditionalFailExtension.class)
 @Flaky("dbz#1220")
+@ExtendWith(ConditionalFailExtension.class)
 public class InformixChunkedSnapshotIT extends AbstractChunkedSnapshotTest<InformixConnector> {
 
     private InformixConnection connection;
@@ -39,26 +38,23 @@ public class InformixChunkedSnapshotIT extends AbstractChunkedSnapshotTest<Infor
     @BeforeEach
     public void beforeEach() throws Exception {
         connection = TestHelper.testConnection();
-        TestHelper.dropTables(connection, getAllTableNames().toArray(new String[5]));
-
-        initializeConnectorTestFramework();
-        Testing.Files.delete(TestHelper.SCHEMA_HISTORY_PATH);
-
+        TestHelper.dropTables(getAllTableNames().toArray(new String[0]));
+        Files.delete(TestHelper.SCHEMA_HISTORY_PATH);
         super.beforeEach();
     }
 
     @AfterEach
     public void afterEach() throws Exception {
-        stopConnector();
+        super.afterEach();
+        stopConnector(TestHelper.getLoggingCleanupCallback(getAllTableNames().toArray(new String[0])));
         waitForConnectorShutdown(TestHelper.TEST_CONNECTOR, TestHelper.TEST_DATABASE);
         assertConnectorNotRunning();
 
         if (connection != null) {
             connection.rollback();
-            TestHelper.dropTables(connection, getAllTableNames().toArray(new String[5]));
+            TestHelper.dropTables(getAllTableNames().toArray(new String[5]));
             connection.close();
         }
-        super.afterEach();
     }
 
     @Override
